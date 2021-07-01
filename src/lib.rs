@@ -522,6 +522,8 @@ pub struct MoldNode {
     time: f32,
 }
 
+const RUNS_PER_FRAME: usize = 5;
+
 impl Node for MoldNode {
     fn run(
         &self,
@@ -539,67 +541,69 @@ impl Node for MoldNode {
                 delta: FIXED_DELTA_TIME,
             }),
         );
-        {
-            let mut pass =
-                render_context
-                    .command_encoder
-                    .begin_compute_pass(&ComputePassDescriptor {
-                        label: Some("run-move"),
-                    });
 
-            pass.set_pipeline(&shaders.move_pipeline);
-            pass.set_bind_group(2, shaders.time_bg.value(), &[]);
-            pass.set_bind_group(1, shaders.metadata_bg.value(), &[]);
-            pass.set_bind_group(0, shaders.move_bg.value(), &[]);
-            pass.dispatch(div_ceil(AGENT_COUNT, 32), 1, 1);
+        for _ in 0..RUNS_PER_FRAME {
+            {
+                let mut pass =
+                    render_context
+                        .command_encoder
+                        .begin_compute_pass(&ComputePassDescriptor {
+                            label: Some("run-move"),
+                        });
+
+                pass.set_pipeline(&shaders.move_pipeline);
+                pass.set_bind_group(2, shaders.time_bg.value(), &[]);
+                pass.set_bind_group(1, shaders.metadata_bg.value(), &[]);
+                pass.set_bind_group(0, shaders.move_bg.value(), &[]);
+                pass.dispatch(div_ceil(AGENT_COUNT, 32), 1, 1);
+            }
+            {
+                let mut pass =
+                    render_context
+                        .command_encoder
+                        .begin_compute_pass(&ComputePassDescriptor {
+                            label: Some("run-blur"),
+                        });
+
+                pass.set_pipeline(&shaders.blur_pipeline);
+                pass.set_bind_group(1, shaders.time_bg.value(), &[]);
+                pass.set_bind_group(0, shaders.blur_bg.value(), &[]);
+                pass.dispatch(div_ceil(TEX_WIDTH, 32), div_ceil(TEX_HEIGHT, 32), 1);
+            }
+
+            render_context
+                .command_encoder
+                .begin_render_pass(&RenderPassDescriptor {
+                    label: Some("clear"),
+                    color_attachments: &[wgpu::RenderPassColorAttachment {
+                        view: &shaders.update_write_view,
+                        resolve_target: None,
+                        ops: Operations {
+                            load: LoadOp::Clear(wgpu::Color::BLACK),
+                            store: true,
+                        },
+                    }],
+                    depth_stencil_attachment: None,
+                });
+
+            render_context.command_encoder.copy_texture_to_texture(
+                ImageCopyTexture {
+                    texture: &shaders.blur_write_texture,
+                    mip_level: 0,
+                    origin: Origin3d::ZERO,
+                },
+                ImageCopyTexture {
+                    texture: &shaders.primary_texture,
+                    mip_level: 0,
+                    origin: Origin3d::ZERO,
+                },
+                Extent3d {
+                    width: TEX_WIDTH,
+                    height: TEX_HEIGHT,
+                    depth_or_array_layers: 1,
+                },
+            );
         }
-        {
-            let mut pass =
-                render_context
-                    .command_encoder
-                    .begin_compute_pass(&ComputePassDescriptor {
-                        label: Some("run-blur"),
-                    });
-
-            pass.set_pipeline(&shaders.blur_pipeline);
-            pass.set_bind_group(1, shaders.time_bg.value(), &[]);
-            pass.set_bind_group(0, shaders.blur_bg.value(), &[]);
-            pass.dispatch(div_ceil(TEX_WIDTH, 32), div_ceil(TEX_HEIGHT, 32), 1);
-        }
-
-        render_context
-            .command_encoder
-            .begin_render_pass(&RenderPassDescriptor {
-                label: Some("clear"),
-                color_attachments: &[wgpu::RenderPassColorAttachment {
-                    view: &shaders.update_write_view,
-                    resolve_target: None,
-                    ops: Operations {
-                        load: LoadOp::Clear(wgpu::Color::BLACK),
-                        store: true,
-                    },
-                }],
-                depth_stencil_attachment: None,
-            });
-
-        render_context.command_encoder.copy_texture_to_texture(
-            ImageCopyTexture {
-                texture: &shaders.blur_write_texture,
-                mip_level: 0,
-                origin: Origin3d::ZERO,
-            },
-            ImageCopyTexture {
-                texture: &shaders.primary_texture,
-                mip_level: 0,
-                origin: Origin3d::ZERO,
-            },
-            Extent3d {
-                width: TEX_WIDTH,
-                height: TEX_HEIGHT,
-                depth_or_array_layers: 1,
-            },
-        );
-
         let ew = &world.get_resource::<ExtractedWindows>().unwrap().windows[&WindowId::primary()];
 
         let mut pass = render_context

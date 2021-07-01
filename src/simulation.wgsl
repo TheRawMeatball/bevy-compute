@@ -1,10 +1,10 @@
 let trail_weight: f32 = 5.0;
-let decayRate: f32 = 0.2;
-let diffuseRate: f32 = 3.0;
-let move_speed: f32 = 20.0;
-let turn_speed: f32 = 2.0;
+let decayRate: f32 = 0.5;
+let diffuseRate: f32 = 4.0;
+let move_speed: f32 = 15.0;
+let turn_speed: f32 = 15.0;
 let sensor_angle_degrees: f32 = 30.0;
-let sensor_offset: f32 = 35.0;
+let sensor_offset: f32 = 25.0;
 let sensor_size: i32 = 1;
 
 fn hash(state: u32) -> u32 {

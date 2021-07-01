@@ -87,8 +87,6 @@ struct Metadata {
 pub struct MoldShaders {
     move_pipeline: ComputePipeline,
     move_bg: BindGroup,
-    paint_pipeline: ComputePipeline,
-    paint_bg: BindGroup,
     blur_pipeline: ComputePipeline,
     blur_bg: BindGroup,
 
@@ -98,8 +96,8 @@ pub struct MoldShaders {
     display_bg: BindGroup,
 
     primary_texture: Texture,
-    paint_write_texture: Texture,
-    paint_write_view: TextureView,
+    update_write_texture: Texture,
+    update_write_view: TextureView,
     blur_write_texture: Texture,
 
     time_buffer: Buffer,
@@ -148,8 +146,8 @@ impl FromWorld for MoldShaders {
             format: TextureFormat::R32Float,
             usage: TextureUsage::STORAGE | TextureUsage::COPY_DST,
         });
-        let paint_write_texture = render_device.create_texture(&TextureDescriptor {
-            label: Some("paint_write_trail_map"),
+        let update_write_texture = render_device.create_texture(&TextureDescriptor {
+            label: Some("update_write_trail_map"),
             size: Extent3d {
                 width: TEX_WIDTH,
                 height: TEX_HEIGHT,
@@ -184,7 +182,7 @@ impl FromWorld for MoldShaders {
             base_array_layer: 0,
             array_layer_count: None,
         });
-        let paint_write_view = paint_write_texture.create_view(&TextureViewDescriptor {
+        let update_write_view = update_write_texture.create_view(&TextureViewDescriptor {
             label: None,
             format: Some(TextureFormat::R32Float),
             dimension: Some(TextureViewDimension::D2),
@@ -272,7 +270,7 @@ impl FromWorld for MoldShaders {
             }],
         });
 
-        let move_bgl = render_device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        let update_bgl = render_device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("mold_move_bgl"),
             entries: &[
                 BindGroupLayoutEntry {
@@ -295,11 +293,21 @@ impl FromWorld for MoldShaders {
                     },
                     count: None,
                 },
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStage::COMPUTE,
+                    ty: BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: TextureFormat::R32Float,
+                        view_dimension: TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
             ],
         });
-        let move_bg = render_device.create_bind_group(&BindGroupDescriptor {
-            label: Some("mold_move_bg"),
-            layout: &move_bgl,
+        let update_bg = render_device.create_bind_group(&BindGroupDescriptor {
+            label: Some("mold_update_bg"),
+            layout: &update_bgl,
             entries: &[
                 BindGroupEntry {
                     binding: 0,
@@ -313,76 +321,23 @@ impl FromWorld for MoldShaders {
                     binding: 1,
                     resource: BindingResource::TextureView(&primary_view),
                 },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::TextureView(&update_write_view),
+                },
             ],
         });
-        let move_l = render_device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("mold_move_l"),
-            bind_group_layouts: &[&move_bgl, &metadata_bgl, &time_bgl],
+        let update_l = render_device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("mold_update_l"),
+            bind_group_layouts: &[&update_bgl, &metadata_bgl, &time_bgl],
             push_constant_ranges: &[],
         });
-        let move_pipeline =
+        let update_pipeline =
             render_device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("mold_move"),
-                layout: Some(&move_l),
+                label: Some("mold_update"),
+                layout: Some(&update_l),
                 module: &shader_module,
-                entry_point: "move_agents",
-            });
-
-        let paint_bgl = render_device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("mold_paint_bgl"),
-            entries: &[
-                BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: ShaderStage::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: BufferSize::new(64),
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: ShaderStage::COMPUTE,
-                    ty: BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: TextureFormat::R32Float,
-                        view_dimension: TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-            ],
-        });
-        let paint_bg = render_device.create_bind_group(&BindGroupDescriptor {
-            label: Some("mold_paint_bg"),
-            layout: &paint_bgl,
-            entries: &[
-                BindGroupEntry {
-                    binding: 0,
-                    resource: BindingResource::Buffer(BufferBinding {
-                        buffer: &agent_buffer,
-                        offset: 0,
-                        size: None,
-                    }),
-                },
-                BindGroupEntry {
-                    binding: 1,
-                    resource: BindingResource::TextureView(&paint_write_view),
-                },
-            ],
-        });
-        let paint_l = render_device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("mold_paint_l"),
-            bind_group_layouts: &[&paint_bgl, &metadata_bgl, &time_bgl],
-            push_constant_ranges: &[],
-        });
-
-        let paint_pipeline =
-            render_device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("mold_paint"),
-                layout: Some(&paint_l),
-                module: &shader_module,
-                entry_point: "paint_agents",
+                entry_point: "update",
             });
 
         let blur_bgl = render_device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -430,7 +385,7 @@ impl FromWorld for MoldShaders {
                 },
                 BindGroupEntry {
                     binding: 1,
-                    resource: BindingResource::TextureView(&paint_write_view),
+                    resource: BindingResource::TextureView(&update_write_view),
                 },
                 BindGroupEntry {
                     binding: 2,
@@ -525,18 +480,16 @@ impl FromWorld for MoldShaders {
             });
 
         MoldShaders {
-            move_pipeline,
-            move_bg,
-            paint_pipeline,
-            paint_bg,
+            move_pipeline: update_pipeline,
+            move_bg: update_bg,
             blur_pipeline,
             blur_bg,
             metadata_bg,
             display_pipeline,
             display_bg,
             primary_texture,
-            paint_write_texture,
-            paint_write_view,
+            update_write_texture,
+            update_write_view,
             blur_write_texture,
             time_buffer,
             time_bg,
@@ -555,8 +508,8 @@ impl Node for MoldNode {
     ) -> Result<(), NodeRunError> {
         let shaders = world.get_resource::<MoldShaders>().unwrap();
         let time = world.get_resource::<PlainTime>().unwrap();
-        let queue = world.get_resource::<RenderQueue>().unwrap();
-        queue.write_buffer(&shaders.time_buffer, 0, bytemuck::bytes_of(time));
+        let render_queue = world.get_resource::<RenderQueue>().unwrap();
+        render_queue.write_buffer(&shaders.time_buffer, 0, bytemuck::bytes_of(time));
         {
             let mut pass =
                 render_context
@@ -569,20 +522,6 @@ impl Node for MoldNode {
             pass.set_bind_group(2, shaders.time_bg.value(), &[]);
             pass.set_bind_group(1, shaders.metadata_bg.value(), &[]);
             pass.set_bind_group(0, shaders.move_bg.value(), &[]);
-            pass.dispatch(div_ceil(AGENT_COUNT, 32), 1, 1);
-        }
-        {
-            let mut pass =
-                render_context
-                    .command_encoder
-                    .begin_compute_pass(&ComputePassDescriptor {
-                        label: Some("run-paint"),
-                    });
-
-            pass.set_pipeline(&shaders.paint_pipeline);
-            pass.set_bind_group(2, shaders.time_bg.value(), &[]);
-            pass.set_bind_group(1, shaders.metadata_bg.value(), &[]);
-            pass.set_bind_group(0, shaders.paint_bg.value(), &[]);
             pass.dispatch(div_ceil(AGENT_COUNT, 32), 1, 1);
         }
         {
@@ -604,7 +543,7 @@ impl Node for MoldNode {
             .begin_render_pass(&RenderPassDescriptor {
                 label: Some("clear"),
                 color_attachments: &[wgpu::RenderPassColorAttachment {
-                    view: &shaders.paint_write_view,
+                    view: &shaders.update_write_view,
                     resolve_target: None,
                     ops: Operations {
                         load: LoadOp::Clear(wgpu::Color::BLACK),

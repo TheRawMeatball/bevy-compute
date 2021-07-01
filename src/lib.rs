@@ -1,6 +1,7 @@
 use std::num::NonZeroU32;
 
 use bevy::{
+    math::f32,
     prelude::*,
     render2::{
         core_pipeline,
@@ -43,7 +44,7 @@ pub fn main() {
     render_app.add_system_to_stage(RenderStage::Extract, time_extract_system.system());
     render_app.init_resource::<MoldShaders>();
     let mut graph = render_app.world.get_resource_mut::<RenderGraph>().unwrap();
-    graph.add_node("mold", MoldNode);
+    graph.add_node("mold", MoldNode { time: 0. });
     graph
         .add_node_edge("mold", core_pipeline::node::MAIN_PASS_DEPENDENCIES)
         .unwrap();
@@ -71,9 +72,9 @@ fn time_extract_system(time: Res<Time>, mut commands: Commands) {
     });
 }
 
-const AGENT_COUNT: u32 = 250;
-const TEX_WIDTH: u32 = 320;
-const TEX_HEIGHT: u32 = 180;
+const AGENT_COUNT: u32 = 1_000_000;
+const TEX_WIDTH: u32 = 2560;
+const TEX_HEIGHT: u32 = 1440;
 
 #[repr(C)]
 #[derive(bytemuck::Zeroable, bytemuck::Pod, Clone, Copy)]
@@ -144,7 +145,7 @@ impl FromWorld for MoldShaders {
 
         let mut rng = rand::thread_rng();
         let agents = (0..AGENT_COUNT)
-            .map(|_| Agent::gen_point(&mut rng))
+            .map(|_| Agent::gen_circle(&mut rng, 700.))
             .collect::<Vec<_>>();
         let agent_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
             label: Some("mold_agents"),
@@ -515,7 +516,11 @@ impl FromWorld for MoldShaders {
     }
 }
 
-pub struct MoldNode;
+const FIXED_DELTA_TIME: f32 = 1. / 50.;
+
+pub struct MoldNode {
+    time: f32,
+}
 
 impl Node for MoldNode {
     fn run(
@@ -525,9 +530,15 @@ impl Node for MoldNode {
         world: &World,
     ) -> Result<(), NodeRunError> {
         let shaders = world.get_resource::<MoldShaders>().unwrap();
-        let time = world.get_resource::<PlainTime>().unwrap();
         let render_queue = world.get_resource::<RenderQueue>().unwrap();
-        render_queue.write_buffer(&shaders.time_buffer, 0, bytemuck::bytes_of(time));
+        render_queue.write_buffer(
+            &shaders.time_buffer,
+            0,
+            bytemuck::bytes_of(&PlainTime {
+                total: self.time,
+                delta: FIXED_DELTA_TIME,
+            }),
+        );
         {
             let mut pass =
                 render_context
@@ -612,6 +623,10 @@ impl Node for MoldNode {
         drop(pass);
 
         Ok(())
+    }
+
+    fn update(&mut self, _world: &mut World) {
+        self.time += FIXED_DELTA_TIME;
     }
 }
 

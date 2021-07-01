@@ -1,5 +1,5 @@
 let trail_weight: f32 = 5.0;
-let decayRate: f32 = 0.1;
+let decayRate: f32 = 0.2;
 let diffuseRate: f32 = 3.0;
 let move_speed: f32 = 20.0;
 let turn_speed: f32 = 2.0;

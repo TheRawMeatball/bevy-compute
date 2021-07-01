@@ -14,7 +14,7 @@ use bevy::{
         },
         renderer::{RenderContext, RenderDevice, RenderQueue},
         shader::Shader,
-        texture::{BevyDefault, Image, TextureFormatPixelInfo},
+        texture::BevyDefault,
         view::ExtractedWindows,
         RenderStage,
     },
@@ -22,12 +22,14 @@ use bevy::{
     PipelinedDefaultPlugins,
 };
 use rand::Rng;
+use tiff::encoder::colortype::Gray32Float;
 use wgpu::{
     util::BufferInitDescriptor, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor,
     BindingResource, BufferBinding, BufferDescriptor, BufferUsage, ComputePassDescriptor, Extent3d,
-    Face, FragmentState, FrontFace, ImageCopyTexture, ImageCopyTextureBase, ImageDataLayout,
-    LoadOp, MultisampleState, Operations, Origin3d, PolygonMode, PrimitiveState, PrimitiveTopology,
-    RenderPassDescriptor, TextureDescriptor, TextureDimension, TextureUsage, TextureViewDescriptor,
+    Face, FragmentState, FrontFace, ImageCopyBuffer, ImageCopyTexture, ImageDataLayout, LoadOp,
+    MapMode, MultisampleState, Operations, Origin3d, PolygonMode, PrimitiveState,
+    PrimitiveTopology, RenderPassDescriptor, TextureDescriptor, TextureUsage,
+    TextureViewDescriptor,
 };
 
 #[bevy_main]
@@ -102,14 +104,16 @@ pub struct MoldShaders {
     display_bg: BindGroup,
 
     primary_texture: Texture,
-    update_write_texture: Texture,
-    update_write_view: TextureView,
     blur_write_texture: Texture,
+    update_write_view: TextureView,
 
     time_buffer: Buffer,
     time_bg: BindGroup,
+
+    read_buffer: Buffer,
 }
 
+#[allow(unused)]
 impl Agent {
     fn gen_circle(rng: &mut impl Rng, radius: f32) -> Self {
         let radius = radius * f32::sqrt(rng.gen_range(0.0..1.0));
@@ -498,6 +502,13 @@ impl FromWorld for MoldShaders {
                 },
             });
 
+        let read_buffer = render_device.create_buffer(&BufferDescriptor {
+            label: Some("fetch_buffer"),
+            size: 4 * (TEX_WIDTH * TEX_HEIGHT) as u64,
+            usage: BufferUsage::COPY_DST | BufferUsage::MAP_READ,
+            mapped_at_creation: false,
+        });
+
         MoldShaders {
             move_pipeline: update_pipeline,
             move_bg: update_bg,
@@ -507,11 +518,11 @@ impl FromWorld for MoldShaders {
             display_pipeline,
             display_bg,
             primary_texture,
-            update_write_texture,
             update_write_view,
             blur_write_texture,
             time_buffer,
             time_bg,
+            read_buffer,
         }
     }
 }
@@ -604,14 +615,61 @@ impl Node for MoldNode {
                 },
             );
         }
-        let ew = &world.get_resource::<ExtractedWindows>().unwrap().windows[&WindowId::primary()];
 
+        render_context.command_encoder.copy_texture_to_buffer(
+            ImageCopyTexture {
+                texture: &shaders.blur_write_texture,
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+            },
+            ImageCopyBuffer {
+                buffer: &shaders.read_buffer,
+                layout: ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: NonZeroU32::new(4 * TEX_WIDTH),
+                    rows_per_image: NonZeroU32::new(TEX_HEIGHT),
+                },
+            },
+            Extent3d {
+                width: TEX_WIDTH,
+                height: TEX_HEIGHT,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        let slice = shaders.read_buffer.slice(..);
+        render_context
+            .render_device
+            .map_buffer(&slice, MapMode::Read);
+        let view = slice.get_mapped_range();
+        let floats: &[f32] = bytemuck::cast_slice(&view);
+
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true);
+        options.create(true);
+        let file = options
+            .open(format!(
+                "images/frame_{}.tiff",
+                (self.time / FIXED_DELTA_TIME) as u32 - 1
+            ))
+            .unwrap();
+        let mut encoder = tiff::encoder::TiffEncoder::new(&file).unwrap();
+        encoder
+            .write_image::<Gray32Float>(TEX_WIDTH, TEX_HEIGHT, floats)
+            .unwrap();
+        drop(encoder);
+        drop(file);
+        drop(view);
+        shaders.read_buffer.unmap();
+
+        let ew = &world.get_resource::<ExtractedWindows>().unwrap().windows[&WindowId::primary()];
+        let swapchain = ew.swap_chain_frame.as_ref().unwrap();
         let mut pass = render_context
             .command_encoder
             .begin_render_pass(&RenderPassDescriptor {
                 label: Some("mold_display"),
                 color_attachments: &[wgpu::RenderPassColorAttachment {
-                    view: ew.swap_chain_frame.as_ref().unwrap(),
+                    view: swapchain,
                     resolve_target: None,
                     ops: Operations {
                         load: LoadOp::Clear(wgpu::Color::BLACK),
@@ -625,7 +683,6 @@ impl Node for MoldNode {
         pass.set_bind_group(0, shaders.display_bg.value(), &[]);
         pass.draw(0..3, 0..1);
         drop(pass);
-
         Ok(())
     }
 

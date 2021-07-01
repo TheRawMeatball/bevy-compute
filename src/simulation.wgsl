@@ -119,7 +119,7 @@ fn update(
 	    m_agents.agents[id].angle = this.angle + randomSteerStrength * turn_speed * m_time.delta;
 	}
 
-    let delta = vec2<f32>(sin(this.angle), cos(this.angle)) * m_time.delta * move_speed;
+    let delta = vec2<f32>(cos(this.angle), sin(this.angle)) * m_time.delta * move_speed;
     var new_pos: vec2<f32> = this.position + delta;
 
     let dim = vec2<f32>(dim);

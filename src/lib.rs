@@ -118,12 +118,12 @@ impl FromWorld for MoldShaders {
         let agents = (0..AGENT_COUNT)
             .map(|_| {
                 let radius = rng.gen_range(1.0..300.0);
-                let theta = rng.gen_range(0.0..std::f32::consts::TAU);
+                let theta = rng.gen_range(-std::f32::consts::PI..std::f32::consts::PI);
                 let pos = Vec2::new(f32::cos(theta), f32::sin(theta)) * radius;
                 let offset = Vec2::new(TEX_WIDTH as f32, TEX_HEIGHT as f32) / 2.;
                 Agent {
                     position: pos + offset,
-                    direction: -std::f32::consts::FRAC_PI_2 - theta,
+                    direction: f32::atan2(-pos.y, -pos.x),
                     _pad: 0.,
                 }
             })

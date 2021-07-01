@@ -72,9 +72,9 @@ fn time_extract_system(time: Res<Time>, mut commands: Commands) {
     });
 }
 
-const AGENT_COUNT: u32 = 1_000_000;
-const TEX_WIDTH: u32 = 2560;
-const TEX_HEIGHT: u32 = 1440;
+const AGENT_COUNT: u32 = 200_000;
+const TEX_WIDTH: u32 = 1920;
+const TEX_HEIGHT: u32 = 1080;
 
 #[repr(C)]
 #[derive(bytemuck::Zeroable, bytemuck::Pod, Clone, Copy)]
@@ -112,7 +112,7 @@ pub struct MoldShaders {
 
 impl Agent {
     fn gen_circle(rng: &mut impl Rng, radius: f32) -> Self {
-        let radius = rng.gen_range(1.0..radius);
+        let radius = radius * f32::sqrt(rng.gen_range(0.0..1.0));
         let theta = rng.gen_range(-std::f32::consts::PI..std::f32::consts::PI);
         let pos = Vec2::new(f32::cos(theta), f32::sin(theta)) * radius;
         let offset = Vec2::new(TEX_WIDTH as f32, TEX_HEIGHT as f32) / 2.;
@@ -145,7 +145,7 @@ impl FromWorld for MoldShaders {
 
         let mut rng = rand::thread_rng();
         let agents = (0..AGENT_COUNT)
-            .map(|_| Agent::gen_circle(&mut rng, 700.))
+            .map(|_| Agent::gen_circle(&mut rng, 520.))
             .collect::<Vec<_>>();
         let agent_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
             label: Some("mold_agents"),

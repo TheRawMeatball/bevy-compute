@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../bevy"
+		}
+	],
+	"settings": {
+		// "rust-analyzer.checkOnSave.extraArgs": [
+		// 	"--target-dir",
+		// 	"/tmp/rust-analyzer-check"
+		// ]
+	}
+}

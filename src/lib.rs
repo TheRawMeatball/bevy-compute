@@ -32,7 +32,12 @@ use wgpu::{
 #[bevy_main]
 pub fn main() {
     let mut app = App::new();
-    app.add_plugins(PipelinedDefaultPlugins);
+    app.insert_resource(WindowDescriptor {
+        width: 1920.,
+        height: 1080.,
+        ..Default::default()
+    })
+    .add_plugins(PipelinedDefaultPlugins);
 
     let render_app = app.sub_app_mut(0);
     render_app.add_system_to_stage(RenderStage::Extract, time_extract_system.system());
@@ -66,9 +71,9 @@ fn time_extract_system(time: Res<Time>, mut commands: Commands) {
     });
 }
 
-const AGENT_COUNT: u32 = 50_000;
-const TEX_WIDTH: u32 = 1280;
-const TEX_HEIGHT: u32 = 720;
+const AGENT_COUNT: u32 = 250;
+const TEX_WIDTH: u32 = 320;
+const TEX_HEIGHT: u32 = 180;
 
 #[repr(C)]
 #[derive(bytemuck::Zeroable, bytemuck::Pod, Clone, Copy)]
@@ -104,6 +109,29 @@ pub struct MoldShaders {
     time_bg: BindGroup,
 }
 
+impl Agent {
+    fn gen_circle(rng: &mut impl Rng, radius: f32) -> Self {
+        let radius = rng.gen_range(1.0..radius);
+        let theta = rng.gen_range(-std::f32::consts::PI..std::f32::consts::PI);
+        let pos = Vec2::new(f32::cos(theta), f32::sin(theta)) * radius;
+        let offset = Vec2::new(TEX_WIDTH as f32, TEX_HEIGHT as f32) / 2.;
+        Agent {
+            position: pos + offset,
+            direction: f32::atan2(-pos.y, -pos.x),
+            _pad: 0.,
+        }
+    }
+
+    fn gen_point(rng: &mut impl Rng) -> Self {
+        let offset = Vec2::new(TEX_WIDTH as f32, TEX_HEIGHT as f32) / 2.;
+        Agent {
+            position: offset,
+            direction: rng.gen_range(-std::f32::consts::PI..std::f32::consts::PI),
+            _pad: 0.,
+        }
+    }
+}
+
 // TODO: this pattern for initializing the shaders / pipeline isn't ideal. this should be handled by the asset system
 impl FromWorld for MoldShaders {
     fn from_world(world: &mut World) -> Self {
@@ -116,17 +144,7 @@ impl FromWorld for MoldShaders {
 
         let mut rng = rand::thread_rng();
         let agents = (0..AGENT_COUNT)
-            .map(|_| {
-                let radius = rng.gen_range(1.0..300.0);
-                let theta = rng.gen_range(-std::f32::consts::PI..std::f32::consts::PI);
-                let pos = Vec2::new(f32::cos(theta), f32::sin(theta)) * radius;
-                let offset = Vec2::new(TEX_WIDTH as f32, TEX_HEIGHT as f32) / 2.;
-                Agent {
-                    position: pos + offset,
-                    direction: f32::atan2(-pos.y, -pos.x),
-                    _pad: 0.,
-                }
-            })
+            .map(|_| Agent::gen_point(&mut rng))
             .collect::<Vec<_>>();
         let agent_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
             label: Some("mold_agents"),

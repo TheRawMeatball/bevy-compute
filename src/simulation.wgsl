@@ -1,3 +1,12 @@
+let sensor_offset_dir: f32 = 35.0;
+let sensor_size: i32 = 1;
+let sensor_angle_degrees: f32 = 30.0;
+let turn_speed: f32 = 2.0;
+let move_speed: f32 = 20.0;
+let trail_weight: f32 = 5.0;
+let diffuseRate: f32 = 3.0;
+let decayRate: f32 = 0.2;
+
 fn hash(state: u32) -> u32 {
     let state = state ^ 2747636419u;
     let state = state * 2654435769u;
@@ -44,13 +53,6 @@ struct Time {
 
 [[group(2), binding(0)]]
 var<uniform> m_time: Time;
-
-let sensor_offset_dir: f32 = 35.0;
-let sensor_size: i32 = 1;
-let sensor_angle_degrees: f32 = 30.0;
-let turn_speed: f32 = 2.0;
-let move_speed: f32 = 20.0;
-let trail_weight: f32 = 5.0;
 
 fn sense(agent: Agent, sensor_angle_offset: f32) -> f32 {
 	let sensorAngle = agent.angle + sensor_angle_offset;
@@ -158,9 +160,6 @@ fn paint_agents(
 	let pos = vec2<i32>(this.position);
     textureStore(p_texture, pos, vec4<f32>(trail_weight * p_time.delta));
 }
-
-let diffuseRate: f32 = 3.0;
-let decayRate: f32 = 0.2;
 
 [[group(0), binding(0)]]
 var b_texture_r: [[access(read)]] texture_storage_2d<r32float>;

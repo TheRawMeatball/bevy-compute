@@ -14,12 +14,14 @@ fn vs_main([[builtin(vertex_index)]] in_vertex_index: u32) -> VertexOutput {
 }
 
 [[group(0), binding(0)]]
-var texture: [[access(read)]] texture_storage_2d<r32float>;
+var texture: [[access(read)]] texture_storage_2d_array<r32float>;
 
 [[stage(fragment)]]
 fn fs_main(in: VertexOutput) -> [[location(0)]] vec4<f32> {
     let dimensions = textureDimensions(texture);
     let pos = vec2<f32>(dimensions) * in.uv;
-    let col = textureLoad(texture, vec2<i32>(pos)).r;
+    // for(var i: i32 = 0; i < 4; i = i + 1) {
+    let col = textureLoad(texture, vec2<i32>(pos), 0).r;
+    // }
     return vec4<f32>(vec3<f32>(col), 1.0);
 }

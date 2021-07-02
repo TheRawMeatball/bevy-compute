@@ -1,4 +1,7 @@
-use std::num::NonZeroU32;
+use std::{
+    num::{NonZeroU32, NonZeroU64},
+    sync::Mutex,
+};
 
 use bevy::{
     math::f32,
@@ -14,7 +17,7 @@ use bevy::{
         },
         renderer::{RenderContext, RenderDevice, RenderQueue},
         shader::Shader,
-        texture::BevyDefault,
+        texture::{BevyDefault, GpuImage, Image, TextureFormatPixelInfo},
         view::ExtractedWindows,
         RenderStage,
     },
@@ -22,15 +25,15 @@ use bevy::{
     PipelinedDefaultPlugins,
 };
 use rand::Rng;
-use tiff::encoder::colortype::Gray32Float;
 use wgpu::{
     util::BufferInitDescriptor, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor,
-    BindingResource, BufferBinding, BufferDescriptor, BufferUsage, ComputePassDescriptor, Extent3d,
-    Face, FragmentState, FrontFace, ImageCopyBuffer, ImageCopyTexture, ImageDataLayout, LoadOp,
-    MapMode, MultisampleState, Operations, Origin3d, PolygonMode, PrimitiveState,
-    PrimitiveTopology, RenderPassDescriptor, TextureDescriptor, TextureUsage,
-    TextureViewDescriptor,
+    BindingResource, BufferBinding, BufferDescriptor, BufferUsage, CommandEncoderDescriptor,
+    ComputePassDescriptor, Extent3d, Face, FragmentState, FrontFace, ImageCopyBuffer,
+    ImageCopyTexture, ImageDataLayout, LoadOp, MapMode, MultisampleState, Operations, Origin3d,
+    PolygonMode, PrimitiveState, PrimitiveTopology, RenderPassDescriptor, TextureDescriptor,
+    TextureDimension, TextureUsage, TextureViewDescriptor,
 };
+use wgpu_types::ImageSubresourceRange;
 
 #[bevy_main]
 pub fn main() {
@@ -46,7 +49,15 @@ pub fn main() {
     render_app.add_system_to_stage(RenderStage::Extract, time_extract_system.system());
     render_app.init_resource::<MoldShaders>();
     let mut graph = render_app.world.get_resource_mut::<RenderGraph>().unwrap();
-    graph.add_node("mold", MoldNode { time: 0. });
+    graph.add_node(
+        "mold",
+        MoldNode {
+            inner: Mutex::new(MoldNodeInner {
+                time: 0.,
+                state: ReadState::A,
+            }),
+        },
+    );
     graph
         .add_node_edge("mold", core_pipeline::node::MAIN_PASS_DEPENDENCIES)
         .unwrap();
@@ -74,38 +85,64 @@ fn time_extract_system(time: Res<Time>, mut commands: Commands) {
     });
 }
 
-const AGENT_COUNT: u32 = 200_000;
-const TEX_WIDTH: u32 = 1920;
-const TEX_HEIGHT: u32 = 1080;
+const AGENT_COUNT: u32 = 1_000_000;
+const TEX_WIDTH: u32 = 2560;
+const TEX_HEIGHT: u32 = 1440;
+const SPECIES: &[Settings] = &[Settings {
+    trail_weight: 5.0,
+    move_speed: 15.,
+    turn_speed: 15.,
+    sensor_angle_degrees: 30.,
+    sensor_offset: 25.,
+    sensor_size: 1,
+}];
+const SPECIES_COUNT: u32 = SPECIES.len() as u32;
+const GLOBAL_SETTINGS: &GlobalSettings = &GlobalSettings {
+    decay_rate: 0.5,
+    diffuse_rate: 4.0,
+};
 
 #[repr(C)]
 #[derive(bytemuck::Zeroable, bytemuck::Pod, Clone, Copy)]
 struct Agent {
     position: Vec2,
     direction: f32,
-    _pad: f32,
+    species: i32,
 }
 
 #[repr(C)]
 #[derive(bytemuck::Zeroable, bytemuck::Pod, Clone, Copy)]
-struct Metadata {
-    agent_count: u32,
+struct Settings {
+    trail_weight: f32,
+    move_speed: f32,
+    turn_speed: f32,
+    sensor_angle_degrees: f32,
+    sensor_offset: f32,
+    sensor_size: i32,
+}
+
+#[repr(C)]
+#[derive(bytemuck::Zeroable, bytemuck::Pod, Clone, Copy)]
+struct GlobalSettings {
+    decay_rate: f32,
+    diffuse_rate: f32,
 }
 
 pub struct MoldShaders {
-    move_pipeline: ComputePipeline,
-    move_bg: BindGroup,
+    update_pipeline: ComputePipeline,
+    update_bg_a: BindGroup,
+    update_bg_b: BindGroup,
     blur_pipeline: ComputePipeline,
-    blur_bg: BindGroup,
-
-    metadata_bg: BindGroup,
+    blur_bg_a: BindGroup,
+    blur_bg_b: BindGroup,
 
     display_pipeline: RenderPipeline,
-    display_bg: BindGroup,
+    display_bg_a: BindGroup,
+    display_bg_b: BindGroup,
 
-    primary_texture: Texture,
-    blur_write_texture: Texture,
-    update_write_view: TextureView,
+    primary_texture_a: Texture,
+    primary_texture_b: Texture,
+    update_texture: Texture,
 
     time_buffer: Buffer,
     time_bg: BindGroup,
@@ -123,7 +160,7 @@ impl Agent {
         Agent {
             position: pos + offset,
             direction: f32::atan2(-pos.y, -pos.x),
-            _pad: 0.,
+            species: 0,
         }
     }
 
@@ -132,7 +169,7 @@ impl Agent {
         Agent {
             position: offset,
             direction: rng.gen_range(-std::f32::consts::PI..std::f32::consts::PI),
-            _pad: 0.,
+            species: 0,
         }
     }
 }
@@ -156,109 +193,66 @@ impl FromWorld for MoldShaders {
             usage: BufferUsage::STORAGE,
             contents: bytemuck::cast_slice(&agents),
         });
-        let primary_texture = render_device.create_texture(&TextureDescriptor {
-            label: Some("trail_map"),
-            size: Extent3d {
-                width: TEX_WIDTH,
-                height: TEX_HEIGHT,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: TextureFormat::R32Float,
-            usage: TextureUsage::STORAGE | TextureUsage::COPY_DST,
-        });
-        let update_write_texture = render_device.create_texture(&TextureDescriptor {
-            label: Some("update_write_trail_map"),
-            size: Extent3d {
-                width: TEX_WIDTH,
-                height: TEX_HEIGHT,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: TextureFormat::R32Float,
-            usage: TextureUsage::STORAGE | TextureUsage::RENDER_ATTACHMENT,
-        });
-        let blur_write_texture = render_device.create_texture(&TextureDescriptor {
-            label: Some("blur_write_trail_map"),
-            size: Extent3d {
-                width: TEX_WIDTH,
-                height: TEX_HEIGHT,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: TextureFormat::R32Float,
-            usage: TextureUsage::STORAGE | TextureUsage::COPY_SRC,
-        });
-        let primary_view = primary_texture.create_view(&TextureViewDescriptor {
-            label: None,
-            format: Some(TextureFormat::R32Float),
-            dimension: Some(TextureViewDimension::D2),
-            aspect: wgpu::TextureAspect::All,
-            base_mip_level: 0,
-            mip_level_count: None,
-            base_array_layer: 0,
-            array_layer_count: None,
-        });
-        let update_write_view = update_write_texture.create_view(&TextureViewDescriptor {
-            label: None,
-            format: Some(TextureFormat::R32Float),
-            dimension: Some(TextureViewDimension::D2),
-            aspect: wgpu::TextureAspect::All,
-            base_mip_level: 0,
-            mip_level_count: None,
-            base_array_layer: 0,
-            array_layer_count: None,
-        });
-        let blur_write_view = blur_write_texture.create_view(&TextureViewDescriptor {
-            label: None,
-            format: Some(TextureFormat::R32Float),
-            dimension: Some(TextureViewDimension::D2),
-            aspect: wgpu::TextureAspect::All,
-            base_mip_level: 0,
-            mip_level_count: None,
-            base_array_layer: 0,
-            array_layer_count: None,
-        });
 
-        let metadata = render_device.create_buffer_with_data(&BufferInitDescriptor {
-            label: Some("mold_meta"),
-            contents: bytemuck::bytes_of(&Metadata {
-                agent_count: AGENT_COUNT,
-            }),
+        let settings_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
+            label: Some("species_settings"),
+            contents: bytemuck::cast_slice(SPECIES),
+            usage: BufferUsage::STORAGE,
+        });
+        let global_settings_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
+            label: Some("global_settings"),
+            contents: bytemuck::bytes_of(GLOBAL_SETTINGS),
             usage: BufferUsage::UNIFORM,
         });
-        let metadata_bgl =
-            render_device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("mold_meta_bgl"),
-                entries: &[BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: ShaderStage::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: BufferSize::new(4),
-                    },
-                    count: None,
-                }],
-            });
 
-        let metadata_bg = render_device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("mold_meta_bg"),
-            layout: &metadata_bgl,
-            entries: &[BindGroupEntry {
-                binding: 0,
-                resource: BindingResource::Buffer(BufferBinding {
-                    buffer: &metadata,
-                    offset: 0,
-                    size: None,
-                }),
-            }],
+        let texture_descriptor = TextureDescriptor {
+            label: None,
+            size: Extent3d {
+                width: TEX_WIDTH,
+                height: TEX_HEIGHT,
+                depth_or_array_layers: SPECIES_COUNT,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: TextureFormat::R32Float,
+            usage: TextureUsage::STORAGE,
+        };
+        let primary_texture_a = render_device.create_texture(&TextureDescriptor {
+            label: Some("trail_map_a"),
+            ..texture_descriptor
+        });
+        let primary_texture_b = render_device.create_texture(&TextureDescriptor {
+            label: Some("trail_map_b"),
+            ..texture_descriptor
+        });
+        let update_texture = render_device.create_texture(&TextureDescriptor {
+            label: Some("update_write_trail_map"),
+            usage: TextureUsage::STORAGE | TextureUsage::COPY_DST,
+            ..texture_descriptor
+        });
+
+        let texture_view_descriptor = TextureViewDescriptor {
+            label: None,
+            format: Some(TextureFormat::R32Float),
+            dimension: Some(TextureViewDimension::D2Array),
+            aspect: wgpu::TextureAspect::All,
+            base_mip_level: 0,
+            mip_level_count: None,
+            base_array_layer: 0,
+            array_layer_count: NonZeroU32::new(SPECIES_COUNT),
+        };
+        let primary_view_a = primary_texture_a.create_view(&TextureViewDescriptor {
+            label: Some("primary_view_a"),
+            ..texture_view_descriptor
+        });
+        let primary_view_b = primary_texture_b.create_view(&TextureViewDescriptor {
+            label: Some("primary_view_b"),
+            ..texture_view_descriptor
+        });
+        let update_write_view = update_texture.create_view(&TextureViewDescriptor {
+            label: Some("update_write_view"),
+            ..texture_view_descriptor
         });
 
         let time_buffer = render_device.create_buffer(&BufferDescriptor {
@@ -294,7 +288,7 @@ impl FromWorld for MoldShaders {
         });
 
         let update_bgl = render_device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("mold_move_bgl"),
+            label: Some("mold_update_bgl"),
             entries: &[
                 BindGroupLayoutEntry {
                     binding: 0,
@@ -302,17 +296,17 @@ impl FromWorld for MoldShaders {
                     ty: BindingType::Buffer {
                         ty: BufferBindingType::Storage { read_only: false },
                         has_dynamic_offset: false,
-                        min_binding_size: BufferSize::new(64),
+                        min_binding_size: BufferSize::new(16),
                     },
                     count: None,
                 },
                 BindGroupLayoutEntry {
                     binding: 1,
                     visibility: ShaderStage::COMPUTE,
-                    ty: BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::ReadOnly,
-                        format: TextureFormat::R32Float,
-                        view_dimension: TextureViewDimension::D2,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: BufferSize::new(24),
                     },
                     count: None,
                 },
@@ -320,16 +314,26 @@ impl FromWorld for MoldShaders {
                     binding: 2,
                     visibility: ShaderStage::COMPUTE,
                     ty: BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::ReadOnly,
+                        format: TextureFormat::R32Float,
+                        view_dimension: TextureViewDimension::D2Array,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: ShaderStage::COMPUTE,
+                    ty: BindingType::StorageTexture {
                         access: wgpu::StorageTextureAccess::WriteOnly,
                         format: TextureFormat::R32Float,
-                        view_dimension: TextureViewDimension::D2,
+                        view_dimension: TextureViewDimension::D2Array,
                     },
                     count: None,
                 },
             ],
         });
-        let update_bg = render_device.create_bind_group(&BindGroupDescriptor {
-            label: Some("mold_update_bg"),
+        let update_bg_a = render_device.create_bind_group(&BindGroupDescriptor {
+            label: Some("mold_update_bg_a"),
             layout: &update_bgl,
             entries: &[
                 BindGroupEntry {
@@ -342,17 +346,55 @@ impl FromWorld for MoldShaders {
                 },
                 BindGroupEntry {
                     binding: 1,
-                    resource: BindingResource::TextureView(&primary_view),
+                    resource: BindingResource::Buffer(BufferBinding {
+                        buffer: &settings_buffer,
+                        offset: 0,
+                        size: None,
+                    }),
                 },
                 BindGroupEntry {
                     binding: 2,
+                    resource: BindingResource::TextureView(&primary_view_a),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: BindingResource::TextureView(&update_write_view),
+                },
+            ],
+        });
+        let update_bg_b = render_device.create_bind_group(&BindGroupDescriptor {
+            label: Some("mold_update_bg_b"),
+            layout: &update_bgl,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::Buffer(BufferBinding {
+                        buffer: &agent_buffer,
+                        offset: 0,
+                        size: None,
+                    }),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::Buffer(BufferBinding {
+                        buffer: &settings_buffer,
+                        offset: 0,
+                        size: None,
+                    }),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::TextureView(&primary_view_b),
+                },
+                BindGroupEntry {
+                    binding: 3,
                     resource: BindingResource::TextureView(&update_write_view),
                 },
             ],
         });
         let update_l = render_device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("mold_update_l"),
-            bind_group_layouts: &[&update_bgl, &metadata_bgl, &time_bgl],
+            bind_group_layouts: &[&update_bgl, &time_bgl],
             push_constant_ranges: &[],
         });
         let update_pipeline =
@@ -369,10 +411,10 @@ impl FromWorld for MoldShaders {
                 BindGroupLayoutEntry {
                     binding: 0,
                     visibility: ShaderStage::COMPUTE,
-                    ty: BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::ReadOnly,
-                        format: TextureFormat::R32Float,
-                        view_dimension: TextureViewDimension::D2,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: NonZeroU64::new(8),
                     },
                     count: None,
                 },
@@ -382,7 +424,7 @@ impl FromWorld for MoldShaders {
                     ty: BindingType::StorageTexture {
                         access: wgpu::StorageTextureAccess::ReadOnly,
                         format: TextureFormat::R32Float,
-                        view_dimension: TextureViewDimension::D2,
+                        view_dimension: TextureViewDimension::D2Array,
                     },
                     count: None,
                 },
@@ -390,29 +432,73 @@ impl FromWorld for MoldShaders {
                     binding: 2,
                     visibility: ShaderStage::COMPUTE,
                     ty: BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::ReadOnly,
+                        format: TextureFormat::R32Float,
+                        view_dimension: TextureViewDimension::D2Array,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: ShaderStage::COMPUTE,
+                    ty: BindingType::StorageTexture {
                         access: wgpu::StorageTextureAccess::WriteOnly,
                         format: TextureFormat::R32Float,
-                        view_dimension: TextureViewDimension::D2,
+                        view_dimension: TextureViewDimension::D2Array,
                     },
                     count: None,
                 },
             ],
         });
-        let blur_bg = render_device.create_bind_group(&BindGroupDescriptor {
-            label: Some("mold_blur_bg"),
+        let blur_bg_a = render_device.create_bind_group(&BindGroupDescriptor {
+            label: Some("mold_blur_bg_a"),
             layout: &blur_bgl,
             entries: &[
                 BindGroupEntry {
                     binding: 0,
-                    resource: BindingResource::TextureView(&primary_view),
+                    resource: BindingResource::Buffer(BufferBinding {
+                        buffer: &global_settings_buffer,
+                        offset: 0,
+                        size: None,
+                    }),
                 },
                 BindGroupEntry {
                     binding: 1,
-                    resource: BindingResource::TextureView(&update_write_view),
+                    resource: BindingResource::TextureView(&primary_view_a),
                 },
                 BindGroupEntry {
                     binding: 2,
-                    resource: BindingResource::TextureView(&blur_write_view),
+                    resource: BindingResource::TextureView(&update_write_view),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: BindingResource::TextureView(&primary_view_b),
+                },
+            ],
+        });
+        let blur_bg_b = render_device.create_bind_group(&BindGroupDescriptor {
+            label: Some("mold_blur_bg_b"),
+            layout: &blur_bgl,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::Buffer(BufferBinding {
+                        buffer: &global_settings_buffer,
+                        offset: 0,
+                        size: None,
+                    }),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::TextureView(&primary_view_b),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::TextureView(&update_write_view),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: BindingResource::TextureView(&primary_view_a),
                 },
             ],
         });
@@ -432,25 +518,33 @@ impl FromWorld for MoldShaders {
 
         let display_bgl =
             render_device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("mold_bgl"),
+                label: Some("mold_display_bgl"),
                 entries: &[BindGroupLayoutEntry {
                     binding: 0,
                     visibility: ShaderStage::FRAGMENT,
                     ty: BindingType::StorageTexture {
                         access: wgpu::StorageTextureAccess::ReadOnly,
                         format: TextureFormat::R32Float,
-                        view_dimension: TextureViewDimension::D2,
+                        view_dimension: TextureViewDimension::D2Array,
                     },
                     count: None,
                 }],
             });
 
-        let display_bg = render_device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("mold_display_bg"),
+        let display_bg_a = render_device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("mold_display_bg_a"),
             layout: &display_bgl,
             entries: &[BindGroupEntry {
                 binding: 0,
-                resource: BindingResource::TextureView(&primary_view),
+                resource: BindingResource::TextureView(&primary_view_a),
+            }],
+        });
+        let display_bg_b = render_device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("mold_display_bg_b"),
+            layout: &display_bgl,
+            entries: &[BindGroupEntry {
+                binding: 0,
+                resource: BindingResource::TextureView(&primary_view_b),
             }],
         });
 
@@ -510,19 +604,25 @@ impl FromWorld for MoldShaders {
         });
 
         MoldShaders {
-            move_pipeline: update_pipeline,
-            move_bg: update_bg,
+            update_pipeline,
+            update_bg_a,
+            update_bg_b,
+
             blur_pipeline,
-            blur_bg,
-            metadata_bg,
+            blur_bg_a,
+            blur_bg_b,
+
             display_pipeline,
-            display_bg,
-            primary_texture,
-            update_write_view,
-            blur_write_texture,
+            display_bg_a,
+            display_bg_b,
+
+            primary_texture_a,
+            primary_texture_b,
+            update_texture,
+
+            read_buffer,
             time_buffer,
             time_bg,
-            read_buffer,
         }
     }
 }
@@ -530,7 +630,17 @@ impl FromWorld for MoldShaders {
 const FIXED_DELTA_TIME: f32 = 1. / 50.;
 
 pub struct MoldNode {
+    inner: Mutex<MoldNodeInner>,
+}
+
+pub struct MoldNodeInner {
     time: f32,
+    state: ReadState,
+}
+
+enum ReadState {
+    A,
+    B,
 }
 
 const RUNS_PER_FRAME: usize = 5;
@@ -544,123 +654,109 @@ impl Node for MoldNode {
     ) -> Result<(), NodeRunError> {
         let shaders = world.get_resource::<MoldShaders>().unwrap();
         let render_queue = world.get_resource::<RenderQueue>().unwrap();
-        render_queue.write_buffer(
-            &shaders.time_buffer,
-            0,
-            bytemuck::bytes_of(&PlainTime {
-                total: self.time,
-                delta: FIXED_DELTA_TIME,
-            }),
-        );
+        let this = &mut *self.inner.lock().unwrap();
 
         for _ in 0..RUNS_PER_FRAME {
-            {
-                let mut pass =
-                    render_context
-                        .command_encoder
-                        .begin_compute_pass(&ComputePassDescriptor {
-                            label: Some("run-move"),
-                        });
+            render_queue.write_buffer(
+                &shaders.time_buffer,
+                0,
+                bytemuck::bytes_of(&PlainTime {
+                    total: this.time,
+                    delta: FIXED_DELTA_TIME,
+                }),
+            );
 
-                pass.set_pipeline(&shaders.move_pipeline);
-                pass.set_bind_group(2, shaders.time_bg.value(), &[]);
-                pass.set_bind_group(1, shaders.metadata_bg.value(), &[]);
-                pass.set_bind_group(0, shaders.move_bg.value(), &[]);
-                pass.dispatch(div_ceil(AGENT_COUNT, 32), 1, 1);
-            }
-            {
-                let mut pass =
-                    render_context
-                        .command_encoder
-                        .begin_compute_pass(&ComputePassDescriptor {
-                            label: Some("run-blur"),
-                        });
+            let mut pass =
+                render_context
+                    .command_encoder
+                    .begin_compute_pass(&ComputePassDescriptor {
+                        label: Some("run-update"),
+                    });
 
-                pass.set_pipeline(&shaders.blur_pipeline);
-                pass.set_bind_group(1, shaders.time_bg.value(), &[]);
-                pass.set_bind_group(0, shaders.blur_bg.value(), &[]);
-                pass.dispatch(div_ceil(TEX_WIDTH, 32), div_ceil(TEX_HEIGHT, 32), 1);
-            }
+            pass.set_bind_group(1, shaders.time_bg.value(), &[]);
 
-            render_context
-                .command_encoder
-                .begin_render_pass(&RenderPassDescriptor {
-                    label: Some("clear"),
-                    color_attachments: &[wgpu::RenderPassColorAttachment {
-                        view: &shaders.update_write_view,
-                        resolve_target: None,
-                        ops: Operations {
-                            load: LoadOp::Clear(wgpu::Color::BLACK),
-                            store: true,
-                        },
-                    }],
-                    depth_stencil_attachment: None,
-                });
+            let (update_bg, blur_bg) = match this.state {
+                ReadState::A => (shaders.update_bg_a.value(), shaders.blur_bg_a.value()),
+                ReadState::B => (shaders.update_bg_b.value(), shaders.blur_bg_b.value()),
+            };
 
-            render_context.command_encoder.copy_texture_to_texture(
-                ImageCopyTexture {
-                    texture: &shaders.blur_write_texture,
-                    mip_level: 0,
-                    origin: Origin3d::ZERO,
-                },
-                ImageCopyTexture {
-                    texture: &shaders.primary_texture,
-                    mip_level: 0,
-                    origin: Origin3d::ZERO,
-                },
-                Extent3d {
-                    width: TEX_WIDTH,
-                    height: TEX_HEIGHT,
-                    depth_or_array_layers: 1,
+            pass.set_pipeline(&shaders.update_pipeline);
+            pass.set_bind_group(0, update_bg, &[]);
+            pass.dispatch(div_ceil(AGENT_COUNT, 32), SPECIES_COUNT, 1);
+
+            pass.set_pipeline(&shaders.blur_pipeline);
+            pass.set_bind_group(0, blur_bg, &[]);
+            pass.dispatch(
+                div_ceil(TEX_WIDTH, 32),
+                div_ceil(TEX_HEIGHT, 32),
+                SPECIES_COUNT,
+            );
+
+            drop(pass);
+
+            render_context.command_encoder.clear_texture(
+                &shaders.update_texture,
+                &wgpu_types::ImageSubresourceRange {
+                    aspect: wgpu::TextureAspect::All,
+                    base_mip_level: 0,
+                    mip_level_count: None,
+                    base_array_layer: 0,
+                    array_layer_count: NonZeroU32::new(SPECIES_COUNT),
                 },
             );
+
+            this.time += FIXED_DELTA_TIME;
+            this.state = match this.state {
+                ReadState::A => ReadState::B,
+                ReadState::B => ReadState::A,
+            };
         }
 
-        render_context.command_encoder.copy_texture_to_buffer(
-            ImageCopyTexture {
-                texture: &shaders.blur_write_texture,
-                mip_level: 0,
-                origin: Origin3d::ZERO,
-            },
-            ImageCopyBuffer {
-                buffer: &shaders.read_buffer,
-                layout: ImageDataLayout {
-                    offset: 0,
-                    bytes_per_row: NonZeroU32::new(4 * TEX_WIDTH),
-                    rows_per_image: NonZeroU32::new(TEX_HEIGHT),
-                },
-            },
-            Extent3d {
-                width: TEX_WIDTH,
-                height: TEX_HEIGHT,
-                depth_or_array_layers: 1,
-            },
-        );
+        /*save to file section*//*
+                render_context.command_encoder.copy_texture_to_buffer(
+                    ImageCopyTexture {
+                        texture: &shaders.blur_write_texture,
+                        mip_level: 0,
+                        origin: Origin3d::ZERO,
+                    },
+                    ImageCopyBuffer {
+                        buffer: &shaders.read_buffer,
+                        layout: ImageDataLayout {
+                            offset: 0,
+                            bytes_per_row: NonZeroU32::new(4 * TEX_WIDTH),
+                            rows_per_image: NonZeroU32::new(TEX_HEIGHT),
+                        },
+                    },
+                    Extent3d {
+                        width: TEX_WIDTH,
+                        height: TEX_HEIGHT,
+                        depth_or_array_layers: 1,
+                    },
+                );
 
-        let slice = shaders.read_buffer.slice(..);
-        render_context
-            .render_device
-            .map_buffer(&slice, MapMode::Read);
-        let view = slice.get_mapped_range();
-        let floats: &[f32] = bytemuck::cast_slice(&view);
+                let slice = shaders.read_buffer.slice(..);
+                render_context
+                    .render_device
+                    .map_buffer(&slice, MapMode::Read);
+                let view = slice.get_mapped_range();
 
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true);
-        options.create(true);
-        let file = options
-            .open(format!(
-                "images/frame_{}.tiff",
-                (self.time / FIXED_DELTA_TIME) as u32 - 1
-            ))
-            .unwrap();
-        let mut encoder = tiff::encoder::TiffEncoder::new(&file).unwrap();
-        encoder
-            .write_image::<Gray32Float>(TEX_WIDTH, TEX_HEIGHT, floats)
-            .unwrap();
-        drop(encoder);
-        drop(file);
-        drop(view);
-        shaders.read_buffer.unmap();
+                let filepath = format!(
+                    "/mnt/33CA263211FBF90F/images/frame_{}.png",
+                    (self.time / FIXED_DELTA_TIME) as u32 - 1
+                );
+
+                // image::save_buffer_with_format(
+                //     filepath,
+                //     &view,
+                //     TEX_WIDTH,
+                //     TEX_HEIGHT,
+                //     image::ColorType::L16,
+                //     image::ImageFormat::Png,
+                // );
+
+                drop(view);
+                shaders.read_buffer.unmap();
+        */
 
         let ew = &world.get_resource::<ExtractedWindows>().unwrap().windows[&WindowId::primary()];
         let swapchain = ew.swap_chain_frame.as_ref().unwrap();
@@ -680,14 +776,17 @@ impl Node for MoldNode {
             });
 
         pass.set_pipeline(&shaders.display_pipeline);
-        pass.set_bind_group(0, shaders.display_bg.value(), &[]);
+        pass.set_bind_group(
+            0,
+            match this.state {
+                ReadState::A => shaders.display_bg_a.value(),
+                ReadState::B => shaders.display_bg_b.value(),
+            },
+            &[],
+        );
         pass.draw(0..3, 0..1);
         drop(pass);
         Ok(())
-    }
-
-    fn update(&mut self, _world: &mut World) {
-        self.time += FIXED_DELTA_TIME;
     }
 }
 

@@ -1,20 +1,12 @@
-let trail_weight: f32 = 5.0;
-let decayRate: f32 = 0.5;
-let diffuseRate: f32 = 4.0;
-let move_speed: f32 = 15.0;
-let turn_speed: f32 = 15.0;
-let sensor_angle_degrees: f32 = 30.0;
-let sensor_offset: f32 = 25.0;
-let sensor_size: i32 = 1;
-
 fn hash(state: u32) -> u32 {
-    let state = state ^ 2747636419u;
-    let state = state * 2654435769u;
-    let state = state ^ (state >> 16u);
-    let state = state * 2654435769u;
-    let state = state ^ (state >> 16u);
-    let state = state * 2654435769u;
-    return state;
+    var s: u32 = state;
+    s = s ^ 2747636419u;
+    s = s * 2654435769u;
+    s = s ^ (s >> 16u);
+    s = s * 2654435769u;
+    s = s ^ (s >> 16u);
+    s = s * 2654435769u;
+    return s;
 }
 
 fn scaleToRange01(state: u32) -> f32 {
@@ -24,7 +16,22 @@ fn scaleToRange01(state: u32) -> f32 {
 struct Agent {
     position: vec2<f32>;
     angle: f32;
-    _pad: f32;
+    species: i32;
+};
+
+struct Settings {
+    trail_weight: f32;
+    move_speed: f32;
+    turn_speed: f32;
+    sensor_angle_degrees: f32;
+    sensor_offset: f32;
+    sensor_size: i32;
+};
+
+[[block]]
+struct GlobalSettings {
+    decay_rate: f32;
+    diffuse_rate: f32;
 };
 
 [[block]]
@@ -33,19 +40,9 @@ struct AgentBuffer {
 };
 
 [[block]]
-struct Metadata {
-    agent_count: u32;
+struct AgentSettingsBuffer {
+    settings: array<Settings>;
 };
-
-[[group(0), binding(0)]]
-var<storage> m_agents: [[access(read_write)]] AgentBuffer;
-[[group(0), binding(1)]]
-var m_texture_r: [[access(read)]] texture_storage_2d<r32float>;
-[[group(0), binding(2)]]
-var m_texture_w: [[access(write)]] texture_storage_2d<r32float>;
-
-[[group(1), binding(0)]]
-var<uniform> metadata: Metadata;
 
 [[block]]
 struct Time {
@@ -53,25 +50,38 @@ struct Time {
     delta: f32;
 };
 
-[[group(2), binding(0)]]
-var<uniform> m_time: Time;
+[[group(1), binding(0)]]
+var<uniform> time: Time;
+
+
+[[group(0), binding(0)]]
+var<storage> m_agents: [[access(read_write)]] AgentBuffer;
+[[group(0), binding(1)]]
+var<storage> m_agent_settings: [[access(read)]] AgentSettingsBuffer;
+[[group(0), binding(2)]]
+var m_texture_r: [[access(read)]] texture_storage_2d_array<r32float>;
+[[group(0), binding(3)]]
+var m_texture_w: [[access(write)]] texture_storage_2d_array<r32float>;
 
 fn sense(agent: Agent, sensor_angle_offset: f32) -> f32 {
-    let sensorAngle = agent.angle + sensor_angle_offset;
-    let sensorDir = vec2<f32>(cos(sensorAngle), sin(sensorAngle));
+    let settings = m_agent_settings.settings[agent.species];
 
-    let sensorPos = agent.position + sensorDir * sensor_offset;
-    let sensorCentreX = i32(sensorPos.x);
-    let sensorCentreY = i32(sensorPos.y);
+    let sensor_angle = agent.angle + sensor_angle_offset;
+    let sensor_dir = vec2<f32>(cos(sensor_angle), sin(sensor_angle));
+
+    // let sensor_pos = agent.position + sensor_dir * settings.sensor_offset;
+    let sensor_pos = agent.position + sensor_dir * 25.0;
+    let sensor_center = vec2<i32>(sensor_pos);
 
     var sum: f32 = 0.0;
 
     let dim = vec2<i32>(textureDimensions(m_texture_r));
-    for (var offsetX: i32 = -sensor_size; offsetX <= sensor_size; offsetX = offsetX + 1) {
-        for (var offsetY: i32 = -sensor_size; offsetY <= sensor_size; offsetY = offsetY + 1) {
-            let sampleX = min(dim.x - 1, max(0, sensorCentreX + offsetX));
-            let sampleY = min(dim.y - 1, max(0, sensorCentreY + offsetY));
-            sum = sum + textureLoad(m_texture_r, vec2<i32>(sampleX, sampleY)).x;
+    let sensor_size = 1;//settings.sensor_size;
+    for (var offset_x: i32 = -sensor_size; offset_x <= sensor_size; offset_x = offset_x + 1) {
+        for (var offset_y: i32 = -sensor_size; offset_y <= sensor_size; offset_y = offset_y + 1) {
+            let offset = vec2<i32>(offset_x, offset_y);
+            let sample = clamp(sensor_center + offset, vec2<i32>(0), dim - vec2<i32>(1));
+            sum = sum + textureLoad(m_texture_r, sample, agent.species).x;
         }
     }
 
@@ -83,79 +93,97 @@ fn update(
     [[builtin(global_invocation_id)]] global_id: vec3<u32>,
 ) {
     let id = global_id.x;
+    let agent_count = arrayLength(&m_agents.agents);
 
-    if (id >= metadata.agent_count) {
+    if (id >= agent_count) {
         return;
     }
 
     let dim = vec2<u32>(textureDimensions(m_texture_r));
 
     let agent = m_agents.agents[id];
+    let settings = m_agent_settings.settings[id];
     let pos = agent.position;
 
-    let random = hash(u32(pos.y) * dim.x + u32(pos.x) + hash(id + u32(m_time.total * 100000.0)));
+    var random: u32 = hash(u32(pos.y) * dim.x + u32(pos.x) + hash(id + u32(time.total * 100000.0)));
 
-    let sensorAngleRad = sensor_angle_degrees * (3.1415 / 180.0);
-    let weightForward = sense(agent, 0.0);
-    let weightLeft = sense(agent, sensorAngleRad);
-    let weightRight = sense(agent, -sensorAngleRad);
+    // let sensor_angle_rad = settings.sensor_angle_degrees * (3.1415 / 180.0);
+    let sensor_angle_rad = 30.0 * (3.1415 / 180.0);
+    let weight_forward = sense(agent, 0.0);
+    let weight_left = sense(agent, sensor_angle_rad);
+    let weight_right = sense(agent, -sensor_angle_rad);
 
-    let randomSteerStrength = scaleToRange01(random);
-    // let turnSpeed = turn_speed * 2.0 * 3.1415;
+    let random_steer_strength = scaleToRange01(random);
+
+    // let turn_amount = settings.turn_speed * time.delta;
+    let turn_amount = 15.0 * time.delta;
 
     // Continue in same direction
-    if (weightForward > weightLeft && weightForward > weightRight) {
+    if (weight_forward > weight_left && weight_forward > weight_right) {
         m_agents.agents[id].angle = agent.angle + 0.0;
     }
-    elseif (weightForward < weightLeft && weightForward < weightRight) {
-        m_agents.agents[id].angle = agent.angle + (randomSteerStrength - 0.5) * 2.0 * turn_speed * m_time.delta;
+    elseif (weight_forward < weight_left && weight_forward < weight_right) {
+        m_agents.agents[id].angle = agent.angle + (random_steer_strength - 0.5) * 2.0 * turn_amount;
     }
     // Turn right
-    elseif (weightRight > weightLeft) {
-        m_agents.agents[id].angle = agent.angle - randomSteerStrength * turn_speed * m_time.delta;
+    elseif (weight_right > weight_left) {
+        m_agents.agents[id].angle = agent.angle - random_steer_strength * turn_amount;
     }
     // Turn left
-    elseif (weightLeft > weightRight) {
-        m_agents.agents[id].angle = agent.angle + randomSteerStrength * turn_speed * m_time.delta;
+    elseif (weight_left > weight_right) {
+        m_agents.agents[id].angle = agent.angle + random_steer_strength * turn_amount;
     }
 
-    let delta = vec2<f32>(cos(agent.angle), sin(agent.angle)) * m_time.delta * move_speed;
+    // let delta = vec2<f32>(cos(agent.angle), sin(agent.angle)) * time.delta * settings.move_speed;
+    let delta = vec2<f32>(cos(agent.angle), sin(agent.angle)) * time.delta * 15.0;
     var new_pos: vec2<f32> = agent.position + delta;
 
     let dimf32 = vec2<f32>(dim);
     // Clamp position to map boundaries, and pick new random move dir if hit boundary
     if (new_pos.x < 0.0 || new_pos.x >= dimf32.x || new_pos.y < 0.0 || new_pos.y >= dimf32.y) {
-        let random = hash(random);
-        let randomAngle = scaleToRange01(random) * 2.0 * 3.1415;
+        random = hash(random);
+        let random_angle = scaleToRange01(random) * 2.0 * 3.1415;
 
-        new_pos.x = min(dimf32.x - 1.0, max(0.0, new_pos.x));
-        new_pos.y = min(dimf32.y - 1.0, max(0.0, new_pos.y));
-        m_agents.agents[id].angle = randomAngle;
+        new_pos = clamp(new_pos, vec2<f32>(0.0), dimf32);
+        m_agents.agents[id].angle = random_angle;
     }
     else {
-        textureStore(m_texture_w, vec2<i32>(new_pos), vec4<f32>(trail_weight * m_time.delta));
+        // textureStore(m_texture_w, vec2<i32>(new_pos), agent.species, vec4<f32>(settings.trail_weight * time.delta));
+        textureStore(m_texture_w, vec2<i32>(new_pos), agent.species, vec4<f32>(5.0 * time.delta));
+        // for (var offset_x: i32 = -4; offset_x <= 4; offset_x = offset_x + 1) {
+        //     for (var offset_y: i32 = -4; offset_y <= 4; offset_y = offset_y + 1) {
+        //         let offset = vec2<i32>(offset_x, offset_y);
+        //         let sample = clamp(vec2<i32>(64) + offset, vec2<i32>(0), vec2<i32>(dim) - vec2<i32>(1));
+        //         textureStore(m_texture_w, sample, 0, vec4<f32>(5.0));
+        //     }
+        // }
     }
 
     m_agents.agents[id].position = new_pos;
 }
 
 [[group(0), binding(0)]]
-var b_texture_r: [[access(read)]] texture_storage_2d<r32float>;
-[[group(0), binding(1)]]
-var b_texture_painted: [[access(read)]] texture_storage_2d<r32float>;
-[[group(0), binding(2)]]
-var b_texture_w: [[access(write)]] texture_storage_2d<r32float>;
-[[group(1), binding(0)]]
-var<uniform> b_time: Time;
+var<uniform> b_settings: GlobalSettings;
 
-fn fetch_color(coords: vec2<i32>) -> vec4<f32> {
-    return min(vec4<f32>(1.0), textureLoad(b_texture_r, coords) + textureLoad(b_texture_painted, coords));
+[[group(0), binding(1)]]
+var b_texture_r: [[access(read)]] texture_storage_2d_array<r32float>;
+[[group(0), binding(2)]]
+var b_texture_painted: [[access(read)]] texture_storage_2d_array<r32float>;
+[[group(0), binding(3)]]
+var b_texture_w: [[access(write)]] texture_storage_2d_array<r32float>;
+
+fn fetch_color(coords: vec2<i32>, index: i32) -> f32 {
+    return min(1.0, textureLoad(b_texture_r, coords, index).r + textureLoad(b_texture_painted, coords, index).r);
 }
 
 [[stage(compute), workgroup_size(32, 32)]]
 fn blur(
     [[builtin(global_invocation_id)]] id: vec3<u32>,
 ) {
+    let decay_rate = 0.5; //b_settings.decay_rate;
+    let diffuse_rate = 4.0;// b_settings.diffuse_rate;
+    let species_id = i32(id.z);
+
     let dimensions = vec2<u32>(textureDimensions(b_texture_w));
     if (id.x < 0u || id.x >= dimensions.x || id.y < 0u || id.y >= dimensions.y) {
         return;
@@ -163,22 +191,21 @@ fn blur(
     let coords = vec2<i32>(id.xy);
     let dim = vec2<i32>(dimensions);
 
-    var sum: vec4<f32> = vec4<f32>(0.0);
-    for (var offsetX: i32 = -1; offsetX <= 1; offsetX = offsetX + 1) {
-        for (var offsetY: i32 = -1; offsetY <= 1; offsetY = offsetY + 1) {
-            let sampleX: i32 = min(dim.x - 1, max(0, coords.x + offsetX));
-            let sampleY: i32 = min(dim.y - 1, max(0, coords.y + offsetY));
-            sum = sum + fetch_color(vec2<i32>(sampleX, sampleY));
+    var sum: f32 = 0.0;
+    for (var offset_x: i32 = -1; offset_x <= 1; offset_x = offset_x + 1) {
+        for (var offset_y: i32 = -1; offset_y <= 1; offset_y = offset_y + 1) {
+            let offset = vec2<i32>(offset_x, offset_y);
+            let sample = clamp(coords + offset, vec2<i32>(0), dim - vec2<i32>(1));
+            sum = sum + fetch_color(sample, species_id);
         }
     }
 
     let mean = sum / 9.0;
-    let diffuseWeight = clamp(diffuseRate * b_time.delta, 0.0, 1.0);
+    let diffuse_weight = clamp(diffuse_rate * time.delta, 0.0, 1.0);
 
-    let originalCol = fetch_color(coords).r;
-    let blurredCol = originalCol * (1.0 - diffuseWeight) + mean * (diffuseWeight);
+    let original_color = fetch_color(coords, species_id);
+    let blurred_color = original_color * (1.0 - diffuse_weight) + mean * diffuse_weight;
 
-    let out = max(vec4<f32>(0.0), blurredCol - decayRate * b_time.delta);
-    textureStore(b_texture_w, coords, vec4<f32>(out));
-    // textureStore(b_texture_w, coords, vec4<f32>(scaleToRange01(hash(id.x + id.y * dimensions.x + u32(b_time.total) * 100000000u))));
+    let out = max(0.0, blurred_color - decay_rate * time.delta);
+    textureStore(b_texture_w, coords, species_id, vec4<f32>(out));
 }

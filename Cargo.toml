@@ -16,10 +16,11 @@ dev = ["bevy/dynamic"]
 
 [dependencies]
 bevy = { version = "0.5.0" }
-wgpu = "0.8"
+wgpu = "0.9"
+wgpu-types = "0.9.0"
 rand = "0.8"
 bytemuck = { version = "1.4", features = [ "derive" ] }
-tiff = "0.7.0"
+image = "0.23"
 
 [target.'cfg(target_os = "android")'.dependencies]
 ndk-glue = "0.3"

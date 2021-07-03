@@ -105,9 +105,9 @@ fn time_extract_system(time: Res<Time>, mut commands: Commands) {
     });
 }
 
-const AGENT_COUNT: u32 = 200_000;
-const TEX_WIDTH: u32 = 1280;
-const TEX_HEIGHT: u32 = 720;
+const AGENT_COUNT: u32 = 1_000_000;
+const TEX_WIDTH: u32 = 2560;
+const TEX_HEIGHT: u32 = 1440;
 const SPECIES: &[Settings] = &[Settings {
     trail_weight: 5.0,
     move_speed: 15.,
@@ -115,7 +115,7 @@ const SPECIES: &[Settings] = &[Settings {
     sensor_angle_degrees: 30.,
     sensor_offset: 25.,
     sensor_size: 1,
-}; 4];
+}; 2];
 const DISPLAY_SETTINGS: &[DisplaySettings] = &[
     DisplaySettings {
         color: const_vec3!([0.2, 0.8, 0.8]),
@@ -125,14 +125,14 @@ const DISPLAY_SETTINGS: &[DisplaySettings] = &[
         color: const_vec3!([0.2, 0.2, 0.9]),
         weight: 1.0,
     },
-    DisplaySettings {
-        color: const_vec3!([0.7, 0.2, 0.9]),
-        weight: 1.0,
-    },
-    DisplaySettings {
-        color: const_vec3!([0.1, 0.9, 0.2]),
-        weight: 1.0,
-    },
+    // DisplaySettings {
+    //     color: const_vec3!([0.7, 0.2, 0.9]),
+    //     weight: 1.0,
+    // },
+    // DisplaySettings {
+    //     color: const_vec3!([0.1, 0.9, 0.2]),
+    //     weight: 1.0,
+    // },
 ];
 const _ASSERT_SPECIES_ARRAY_MATCH: () = {
     let _ = [0][DISPLAY_SETTINGS.len() - SPECIES.len()];
@@ -267,39 +267,43 @@ impl FromWorld for MoldShaders {
             size: Extent3d {
                 width: TEX_WIDTH,
                 height: TEX_HEIGHT,
-                depth_or_array_layers: SPECIES_COUNT,
+                depth_or_array_layers: div_ceil(SPECIES_COUNT, 4),
             },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: TextureFormat::R32Float,
+            format: TextureFormat::Rgba16Float,
             usage: TextureUsage::STORAGE,
         };
         let primary_texture_a = render_device.create_texture(&TextureDescriptor {
             label: Some("trail_map_a"),
-            usage: TextureUsage::STORAGE | TextureUsage::COPY_SRC,
             ..texture_descriptor
         });
         let primary_texture_b = render_device.create_texture(&TextureDescriptor {
             label: Some("trail_map_b"),
-            usage: TextureUsage::STORAGE | TextureUsage::COPY_SRC,
             ..texture_descriptor
         });
         let update_texture = render_device.create_texture(&TextureDescriptor {
             label: Some("update_write_trail_map"),
             usage: TextureUsage::STORAGE | TextureUsage::COPY_DST,
+            format: TextureFormat::R32Float,
+            size: Extent3d {
+                width: TEX_WIDTH,
+                height: TEX_HEIGHT,
+                depth_or_array_layers: SPECIES_COUNT,
+            },
             ..texture_descriptor
         });
 
         let texture_view_descriptor = TextureViewDescriptor {
             label: None,
-            format: Some(TextureFormat::R32Float),
+            format: Some(TextureFormat::Rgba16Float),
             dimension: Some(TextureViewDimension::D2Array),
             aspect: wgpu::TextureAspect::All,
             base_mip_level: 0,
             mip_level_count: None,
             base_array_layer: 0,
-            array_layer_count: NonZeroU32::new(SPECIES_COUNT),
+            array_layer_count: NonZeroU32::new(div_ceil(SPECIES_COUNT, 4)),
         };
         let primary_view_a = primary_texture_a.create_view(&TextureViewDescriptor {
             label: Some("primary_view_a"),
@@ -311,6 +315,8 @@ impl FromWorld for MoldShaders {
         });
         let update_write_view = update_texture.create_view(&TextureViewDescriptor {
             label: Some("update_write_view"),
+            format: Some(TextureFormat::R32Float),
+            array_layer_count: NonZeroU32::new(SPECIES_COUNT),
             ..texture_view_descriptor
         });
 
@@ -374,7 +380,7 @@ impl FromWorld for MoldShaders {
                     visibility: ShaderStage::COMPUTE,
                     ty: BindingType::StorageTexture {
                         access: wgpu::StorageTextureAccess::ReadOnly,
-                        format: TextureFormat::R32Float,
+                        format: TextureFormat::Rgba16Float,
                         view_dimension: TextureViewDimension::D2Array,
                     },
                     count: None,
@@ -482,7 +488,7 @@ impl FromWorld for MoldShaders {
                     visibility: ShaderStage::COMPUTE,
                     ty: BindingType::StorageTexture {
                         access: wgpu::StorageTextureAccess::ReadOnly,
-                        format: TextureFormat::R32Float,
+                        format: TextureFormat::Rgba16Float,
                         view_dimension: TextureViewDimension::D2Array,
                     },
                     count: None,
@@ -502,7 +508,7 @@ impl FromWorld for MoldShaders {
                     visibility: ShaderStage::COMPUTE,
                     ty: BindingType::StorageTexture {
                         access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: TextureFormat::R32Float,
+                        format: TextureFormat::Rgba16Float,
                         view_dimension: TextureViewDimension::D2Array,
                     },
                     count: None,
@@ -584,7 +590,7 @@ impl FromWorld for MoldShaders {
                         visibility: ShaderStage::FRAGMENT,
                         ty: BindingType::StorageTexture {
                             access: wgpu::StorageTextureAccess::ReadOnly,
-                            format: TextureFormat::R32Float,
+                            format: TextureFormat::Rgba16Float,
                             view_dimension: TextureViewDimension::D2Array,
                         },
                         count: None,
@@ -773,14 +779,14 @@ impl Node for MoldNode {
 
             pass.set_pipeline(&shaders.update_pipeline);
             pass.set_bind_group(0, update_bg, &[]);
-            pass.dispatch(div_ceil(AGENT_COUNT, 32), SPECIES_COUNT, 1);
+            pass.dispatch(div_ceil(AGENT_COUNT, 32), 1, 1);
 
             pass.set_pipeline(&shaders.blur_pipeline);
             pass.set_bind_group(0, blur_bg, &[]);
             pass.dispatch(
                 div_ceil(TEX_WIDTH, 32),
                 div_ceil(TEX_HEIGHT, 32),
-                SPECIES_COUNT,
+                div_ceil(SPECIES_COUNT, 4),
             );
 
             drop(pass);

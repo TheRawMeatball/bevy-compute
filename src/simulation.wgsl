@@ -59,7 +59,7 @@ var<storage> m_agents: [[access(read_write)]] AgentBuffer;
 [[group(0), binding(1)]]
 var<storage> m_agent_settings: [[access(read)]] AgentSettingsBuffer;
 [[group(0), binding(2)]]
-var m_texture_r: [[access(read)]] texture_storage_2d_array<r32float>;
+var m_texture_r: [[access(read)]] texture_storage_2d_array<rgba16float>;
 [[group(0), binding(3)]]
 var m_texture_w: [[access(write)]] texture_storage_2d_array<r32float>;
 
@@ -73,25 +73,32 @@ fn sense(agent: Agent, sensor_angle_offset: f32) -> f32 {
     let sensor_pos = agent.position + sensor_dir * 25.0;
     let sensor_center = vec2<i32>(sensor_pos);
 
-    var sum: f32 = 0.0;
+    var sum: vec4<f32> = vec4<f32>(0.0);
 
     let dim = vec2<i32>(textureDimensions(m_texture_r));
     let sensor_size = settings.sensor_size;
 
     let species_count = i32(arrayLength(&m_agent_settings.settings));
 
-    for (var species: i32 = 0; species <= species_count; species = species + 1) {
-        let mask = f32(i32(species == agent.species) * 2 - 1);
+    for (var species: i32 = 0; species < species_count; species = species + 4) {
+        let bool_mask = vec4<bool>(
+            species + 0 == agent.species,
+            species + 1 == agent.species,
+            species + 2 == agent.species,
+            species + 3 == agent.species
+        );
+        let int_mask = vec4<i32>(bool_mask);
+        let mask = vec4<f32>(int_mask) * 2.0 - vec4<f32>(1.0);
         for (var offset_x: i32 = -sensor_size; offset_x <= sensor_size; offset_x = offset_x + 1) {
             for (var offset_y: i32 = -sensor_size; offset_y <= sensor_size; offset_y = offset_y + 1) {
                 let offset = vec2<i32>(offset_x, offset_y);
                 let sample = clamp(sensor_center + offset, vec2<i32>(0), dim - vec2<i32>(1));
-                sum = sum + mask * textureLoad(m_texture_r, sample, species).x;
+                sum = sum + mask * textureLoad(m_texture_r, sample, species / 4);
             }
         }
     }
 
-    return sum;
+    return sum.x + sum.y + sum.z + sum.w;
 }
 
 [[stage(compute), workgroup_size(32)]]
@@ -163,14 +170,23 @@ fn update(
 var<uniform> b_settings: GlobalSettings;
 
 [[group(0), binding(1)]]
-var b_texture_r: [[access(read)]] texture_storage_2d_array<r32float>;
+var b_texture_r: [[access(read)]] texture_storage_2d_array<rgba16float>;
 [[group(0), binding(2)]]
 var b_texture_painted: [[access(read)]] texture_storage_2d_array<r32float>;
 [[group(0), binding(3)]]
-var b_texture_w: [[access(write)]] texture_storage_2d_array<r32float>;
+var b_texture_w: [[access(write)]] texture_storage_2d_array<rgba16float>;
 
-fn fetch_color(coords: vec2<i32>, index: i32) -> f32 {
-    return min(1.0, textureLoad(b_texture_r, coords, index).r + textureLoad(b_texture_painted, coords, index).r);
+fn fetch_color(coords: vec2<i32>, index: i32) -> vec4<f32> {
+    let species_count = i32(textureNumLayers(b_texture_painted));
+    var sum: vec4<f32> = textureLoad(b_texture_r, coords, index);
+    sum = sum + vec4<f32>(textureLoad(b_texture_painted, coords, index + 0).r, 0.0, 0.0, 0.0);
+    if (index + 1 >= species_count) { return min(vec4<f32>(1.0), sum); }
+    sum = sum + vec4<f32>(0.0, textureLoad(b_texture_painted, coords, index + 1).r, 0.0, 0.0);
+    if (index + 2 >= species_count) { return min(vec4<f32>(1.0), sum); }
+    sum = sum + vec4<f32>(0.0, 0.0, textureLoad(b_texture_painted, coords, index + 2).r, 0.0);
+    if (index + 3 >= species_count) { return min(vec4<f32>(1.0), sum); }
+    sum = sum + vec4<f32>(0.0, 0.0, 0.0, textureLoad(b_texture_painted, coords, index + 3).r);
+    return min(vec4<f32>(1.0), sum);
 }
 
 [[stage(compute), workgroup_size(32, 32)]]
@@ -179,7 +195,7 @@ fn blur(
 ) {
     let decay_rate = b_settings.decay_rate;
     let diffuse_rate = b_settings.diffuse_rate;
-    let species_id = i32(id.z);
+    let species_group_id = i32(id.z);
 
     let dimensions = vec2<u32>(textureDimensions(b_texture_w));
     if (id.x < 0u || id.x >= dimensions.x || id.y < 0u || id.y >= dimensions.y) {
@@ -188,21 +204,21 @@ fn blur(
     let coords = vec2<i32>(id.xy);
     let dim = vec2<i32>(dimensions);
 
-    var sum: f32 = 0.0;
+    var sum: vec4<f32> = vec4<f32>(0.0);
     for (var offset_x: i32 = -1; offset_x <= 1; offset_x = offset_x + 1) {
         for (var offset_y: i32 = -1; offset_y <= 1; offset_y = offset_y + 1) {
             let offset = vec2<i32>(offset_x, offset_y);
             let sample = clamp(coords + offset, vec2<i32>(0), dim - vec2<i32>(1));
-            sum = sum + fetch_color(sample, species_id);
+            sum = sum + fetch_color(sample, species_group_id);
         }
     }
 
     let mean = sum / 9.0;
     let diffuse_weight = clamp(diffuse_rate * time.delta, 0.0, 1.0);
 
-    let original_color = fetch_color(coords, species_id);
+    let original_color = fetch_color(coords, species_group_id);
     let blurred_color = original_color * (1.0 - diffuse_weight) + mean * diffuse_weight;
 
-    let out = max(0.0, blurred_color - decay_rate * time.delta);
-    textureStore(b_texture_w, coords, species_id, vec4<f32>(out));
+    let out = max(vec4<f32>(0.0), blurred_color - decay_rate * time.delta);
+    textureStore(b_texture_w, coords, species_group_id, out);
 }

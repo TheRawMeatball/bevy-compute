@@ -134,9 +134,10 @@ fn update(
         m_agents.agents[id].angle = agent.angle + random_steer_strength * turn_amount;
     }
 
-    // let delta = vec2<f32>(cos(agent.angle), sin(agent.angle)) * time.delta * settings.move_speed;
-    let delta = vec2<f32>(cos(agent.angle), sin(agent.angle)) * time.delta * 15.0;
-    var new_pos: vec2<f32> = agent.position + delta;
+    // let dist = time.delta * settings.move_speed;
+    let dist = time.delta * 15.0;
+    let dir = vec2<f32>(cos(agent.angle), sin(agent.angle));
+    var new_pos: vec2<f32> = agent.position + dist * dir;
 
     let dimf32 = vec2<f32>(dim);
     // Clamp position to map boundaries, and pick new random move dir if hit boundary

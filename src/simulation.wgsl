@@ -151,13 +151,6 @@ fn update(
     else {
         // textureStore(m_texture_w, vec2<i32>(new_pos), agent.species, vec4<f32>(settings.trail_weight * time.delta));
         textureStore(m_texture_w, vec2<i32>(new_pos), agent.species, vec4<f32>(5.0 * time.delta));
-        // for (var offset_x: i32 = -4; offset_x <= 4; offset_x = offset_x + 1) {
-        //     for (var offset_y: i32 = -4; offset_y <= 4; offset_y = offset_y + 1) {
-        //         let offset = vec2<i32>(offset_x, offset_y);
-        //         let sample = clamp(vec2<i32>(64) + offset, vec2<i32>(0), vec2<i32>(dim) - vec2<i32>(1));
-        //         textureStore(m_texture_w, sample, 0, vec4<f32>(5.0));
-        //     }
-        // }
     }
 
     m_agents.agents[id].position = new_pos;

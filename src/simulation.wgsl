@@ -21,6 +21,7 @@ struct Agent {
 
 struct Settings {
     trail_weight: f32;
+    self_follow: f32;
     move_speed: f32;
     turn_speed: f32;
     sensor_angle_degrees: f32;
@@ -88,7 +89,9 @@ fn sense(agent: Agent, sensor_angle_offset: f32) -> f32 {
             species + 3 == agent.species
         );
         let int_mask = vec4<i32>(bool_mask);
-        let mask = vec4<f32>(int_mask) * 2.0 - vec4<f32>(1.0);
+        let self_mask = vec4<f32>(int_mask);
+        let negative_mask = self_mask - vec4<f32>(1.0);
+        let mask = self_mask * settings.self_follow + negative_mask;
         for (var offset_x: i32 = -sensor_size; offset_x <= sensor_size; offset_x = offset_x + 1) {
             for (var offset_y: i32 = -sensor_size; offset_y <= sensor_size; offset_y = offset_y + 1) {
                 let offset = vec2<i32>(offset_x, offset_y);
@@ -181,11 +184,11 @@ fn fetch_color(coords: vec2<i32>, index: i32) -> vec4<f32> {
     var sum: vec4<f32> = textureLoad(b_texture_r, coords, index);
     let species = index * 4;
     sum = sum + vec4<f32>(textureLoad(b_texture_painted, coords, species + 0).r, 0.0, 0.0, 0.0);
-    if (species + 1 >= species_count) { return min(vec4<f32>(1.0), sum); }
+    if (species + 1 > species_count) { return min(vec4<f32>(1.0), sum); }
     sum = sum + vec4<f32>(0.0, textureLoad(b_texture_painted, coords, species + 1).r, 0.0, 0.0);
-    if (species + 2 >= species_count) { return min(vec4<f32>(1.0), sum); }
+    if (species + 2 > species_count) { return min(vec4<f32>(1.0), sum); }
     sum = sum + vec4<f32>(0.0, 0.0, textureLoad(b_texture_painted, coords, species + 2).r, 0.0);
-    if (species + 3 >= species_count) { return min(vec4<f32>(1.0), sum); }
+    if (species + 3 > species_count) { return min(vec4<f32>(1.0), sum); }
     sum = sum + vec4<f32>(0.0, 0.0, 0.0, textureLoad(b_texture_painted, coords, species + 3).r);
     return min(vec4<f32>(1.0), sum);
 }
@@ -250,10 +253,10 @@ fn combine(
     var col: vec3<f32> = vec3<f32>(0.0);
     for(var i: i32 = 0; i < species_count / 4; i = i + 1) {
         let vals = textureLoad(c_texture, pos, i);
-        col = col + c_disp_settings.settings[i * species_count + 0].color * vals.x;
-        col = col + c_disp_settings.settings[i * species_count + 1].color * vals.y;
-        col = col + c_disp_settings.settings[i * species_count + 2].color * vals.z;
-        col = col + c_disp_settings.settings[i * species_count + 3].color * vals.w;
+        col = col + c_disp_settings.settings[i * 4 + 0].color * vals.x;
+        col = col + c_disp_settings.settings[i * 4 + 1].color * vals.y;
+        col = col + c_disp_settings.settings[i * 4 + 2].color * vals.z;
+        col = col + c_disp_settings.settings[i * 4 + 3].color * vals.w;
     }
     let completed = (species_count / 4) * 4;
     if (species_count % 4 != 0) {

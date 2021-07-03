@@ -122,7 +122,7 @@ fn rgb(hue: f32) -> Vec3 {
 const AGENT_COUNT: u32 = 200_000;
 const TEX_WIDTH: u32 = 1280;
 const TEX_HEIGHT: u32 = 720;
-const SPECIES_COUNT: u32 = 7;
+const SPECIES_COUNT: u32 = 16;
 const GLOBAL_SETTINGS: &GlobalSettings = &GlobalSettings {
     decay_rate: 0.5,
     diffuse_rate: 4.0,
@@ -140,6 +140,7 @@ struct Agent {
 #[derive(bytemuck::Zeroable, bytemuck::Pod, Clone, Copy)]
 struct Settings {
     trail_weight: f32,
+    self_follow: f32,
     move_speed: f32,
     turn_speed: f32,
     sensor_angle_degrees: f32,
@@ -237,6 +238,7 @@ impl FromWorld for MoldShaders {
                 (
                     Settings {
                         trail_weight: 5.0,
+                        self_follow: 4.0,
                         move_speed: 15.,
                         turn_speed: 15.,
                         sensor_angle_degrees: 30.,
@@ -395,7 +397,7 @@ impl FromWorld for MoldShaders {
                     ty: BindingType::Buffer {
                         ty: BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
-                        min_binding_size: BufferSize::new(24),
+                        min_binding_size: BufferSize::new(28),
                     },
                     count: None,
                 },

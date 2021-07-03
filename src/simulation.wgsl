@@ -102,13 +102,12 @@ fn update(
     let dim = vec2<u32>(textureDimensions(m_texture_r));
 
     let agent = m_agents.agents[id];
-    let settings = m_agent_settings.settings[id];
+    let settings = m_agent_settings.settings[agent.species];
     let pos = agent.position;
 
     var random: u32 = hash(u32(pos.y) * dim.x + u32(pos.x) + hash(id + u32(time.total * 100000.0)));
 
-    // let sensor_angle_rad = settings.sensor_angle_degrees * (3.1415 / 180.0);
-    let sensor_angle_rad = 30.0 * (3.1415 / 180.0);
+    let sensor_angle_rad = settings.sensor_angle_degrees * (3.1415 / 180.0);
     let weight_forward = sense(agent, 0.0);
     let weight_left = sense(agent, sensor_angle_rad);
     let weight_right = sense(agent, -sensor_angle_rad);
@@ -134,8 +133,7 @@ fn update(
         m_agents.agents[id].angle = agent.angle + random_steer_strength * turn_amount;
     }
 
-    // let dist = time.delta * settings.move_speed;
-    let dist = time.delta * 15.0;
+    let dist = time.delta * settings.move_speed;
     let dir = vec2<f32>(cos(agent.angle), sin(agent.angle));
     var new_pos: vec2<f32> = agent.position + dist * dir;
 
@@ -149,8 +147,7 @@ fn update(
         m_agents.agents[id].angle = random_angle;
     }
     else {
-        // textureStore(m_texture_w, vec2<i32>(new_pos), agent.species, vec4<f32>(settings.trail_weight * time.delta));
-        textureStore(m_texture_w, vec2<i32>(new_pos), agent.species, vec4<f32>(5.0 * time.delta));
+        textureStore(m_texture_w, vec2<i32>(new_pos), agent.species, vec4<f32>(settings.trail_weight * time.delta));
     }
 
     m_agents.agents[id].position = new_pos;
@@ -174,8 +171,8 @@ fn fetch_color(coords: vec2<i32>, index: i32) -> f32 {
 fn blur(
     [[builtin(global_invocation_id)]] id: vec3<u32>,
 ) {
-    let decay_rate = 0.5; //b_settings.decay_rate;
-    let diffuse_rate = 4.0;// b_settings.diffuse_rate;
+    let decay_rate = b_settings.decay_rate;
+    let diffuse_rate = b_settings.diffuse_rate;
     let species_id = i32(id.z);
 
     let dimensions = vec2<u32>(textureDimensions(b_texture_w));

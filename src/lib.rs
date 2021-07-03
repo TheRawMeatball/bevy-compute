@@ -105,27 +105,17 @@ fn time_extract_system(time: Res<Time>, mut commands: Commands) {
     });
 }
 
-const AGENT_COUNT: u32 = 1_000_000;
-const TEX_WIDTH: u32 = 2560;
-const TEX_HEIGHT: u32 = 1440;
-const SPECIES: &[Settings] = &[
-    Settings {
-        trail_weight: 5.0,
-        move_speed: 15.,
-        turn_speed: 15.,
-        sensor_angle_degrees: 30.,
-        sensor_offset: 25.,
-        sensor_size: 1,
-    },
-    Settings {
-        trail_weight: 5.0,
-        move_speed: 15.,
-        turn_speed: 15.,
-        sensor_angle_degrees: 30.,
-        sensor_offset: 25.,
-        sensor_size: 1,
-    },
-];
+const AGENT_COUNT: u32 = 200_000;
+const TEX_WIDTH: u32 = 1280;
+const TEX_HEIGHT: u32 = 720;
+const SPECIES: &[Settings] = &[Settings {
+    trail_weight: 5.0,
+    move_speed: 15.,
+    turn_speed: 15.,
+    sensor_angle_degrees: 30.,
+    sensor_offset: 25.,
+    sensor_size: 1,
+}; 4];
 const DISPLAY_SETTINGS: &[DisplaySettings] = &[
     DisplaySettings {
         color: const_vec3!([0.2, 0.8, 0.8]),
@@ -133,6 +123,14 @@ const DISPLAY_SETTINGS: &[DisplaySettings] = &[
     },
     DisplaySettings {
         color: const_vec3!([0.2, 0.2, 0.9]),
+        weight: 1.0,
+    },
+    DisplaySettings {
+        color: const_vec3!([0.7, 0.2, 0.9]),
+        weight: 1.0,
+    },
+    DisplaySettings {
+        color: const_vec3!([0.1, 0.9, 0.2]),
         weight: 1.0,
     },
 ];
@@ -237,8 +235,8 @@ impl FromWorld for MoldShaders {
         let mut rng = rand::thread_rng();
         let agents = (0..AGENT_COUNT)
             .map(|i| Agent {
-                species: i as i32 % 2,
-                ..Agent::gen_circle(&mut rng, 520.)
+                species: (i % SPECIES_COUNT) as i32,
+                ..Agent::gen_circle(&mut rng, (u32::min(TEX_WIDTH, TEX_HEIGHT) / 2 - 20) as f32)
             })
             .collect::<Vec<_>>();
         let agent_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {

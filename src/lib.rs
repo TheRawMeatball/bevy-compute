@@ -1,10 +1,10 @@
+use core::panic;
 use std::{
     num::{NonZeroU32, NonZeroU64},
     sync::Mutex,
 };
 
 use bevy::{
-    math::{const_vec3, f32},
     prelude::*,
     render2::{
         core_pipeline,
@@ -105,43 +105,24 @@ fn time_extract_system(time: Res<Time>, mut commands: Commands) {
     });
 }
 
+fn rgb(hue: f32) -> Vec3 {
+    let adj = (hue % 1.0) * 6.;
+    let v = 1.0 - f32::abs(adj % 2.0 - 1.0);
+    match adj {
+        x if (0.0..1.0).contains(&x) => Vec3::new(1., v, 0.),
+        x if (1.0..2.0).contains(&x) => Vec3::new(v, 1., 0.),
+        x if (2.0..3.0).contains(&x) => Vec3::new(0., 1., v),
+        x if (3.0..4.0).contains(&x) => Vec3::new(0., v, 1.),
+        x if (4.0..5.0).contains(&x) => Vec3::new(v, 0., 1.),
+        x if (5.0..6.0).contains(&x) => Vec3::new(1., 0., v),
+        _ => panic!(),
+    }
+}
+
 const AGENT_COUNT: u32 = 200_000;
 const TEX_WIDTH: u32 = 1280;
 const TEX_HEIGHT: u32 = 720;
-const SPECIES: &[Settings] = &[Settings {
-    trail_weight: 5.0,
-    move_speed: 15.,
-    turn_speed: 15.,
-    sensor_angle_degrees: 30.,
-    sensor_offset: 25.,
-    sensor_size: 1,
-}; 5];
-const DISPLAY_SETTINGS: &[DisplaySettings] = &[
-    DisplaySettings {
-        color: const_vec3!([0.2, 0.8, 0.8]),
-        weight: 1.0,
-    },
-    DisplaySettings {
-        color: const_vec3!([0.2, 0.2, 0.9]),
-        weight: 1.0,
-    },
-    DisplaySettings {
-        color: const_vec3!([0.7, 0.2, 0.9]),
-        weight: 1.0,
-    },
-    DisplaySettings {
-        color: const_vec3!([0.1, 0.9, 0.2]),
-        weight: 1.0,
-    },
-    DisplaySettings {
-        color: const_vec3!([0.9, 0.5, 0.1]),
-        weight: 1.0,
-    },
-];
-const _ASSERT_SPECIES_ARRAY_MATCH: () = {
-    let _ = [0][DISPLAY_SETTINGS.len() - SPECIES.len()];
-};
-const SPECIES_COUNT: u32 = SPECIES.len() as u32;
+const SPECIES_COUNT: u32 = 7;
 const GLOBAL_SETTINGS: &GlobalSettings = &GlobalSettings {
     decay_rate: 0.5,
     diffuse_rate: 4.0,
@@ -251,15 +232,34 @@ impl FromWorld for MoldShaders {
             contents: bytemuck::cast_slice(&agents),
         });
 
+        let (species, disp): (Vec<_>, Vec<_>) = (0..SPECIES_COUNT)
+            .map(|i| {
+                (
+                    Settings {
+                        trail_weight: 5.0,
+                        move_speed: 15.,
+                        turn_speed: 15.,
+                        sensor_angle_degrees: 30.,
+                        sensor_offset: 25.,
+                        sensor_size: 1,
+                    },
+                    DisplaySettings {
+                        color: rgb(0.2 + i as f32 / SPECIES_COUNT as f32),
+                        weight: 1.,
+                    },
+                )
+            })
+            .unzip();
+
         let settings_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
             label: Some("species_settings"),
-            contents: bytemuck::cast_slice(SPECIES),
+            contents: bytemuck::cast_slice(&species),
             usage: BufferUsage::STORAGE,
         });
         let combine_settings_buffer =
             render_device.create_buffer_with_data(&BufferInitDescriptor {
                 label: Some("combine_species_settings"),
-                contents: bytemuck::cast_slice(DISPLAY_SETTINGS),
+                contents: bytemuck::cast_slice(&disp),
                 usage: BufferUsage::STORAGE,
             });
         let global_settings_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {

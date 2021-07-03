@@ -119,9 +119,9 @@ fn rgb(hue: f32) -> Vec3 {
     }
 }
 
-const AGENT_COUNT: u32 = 200_000;
-const TEX_WIDTH: u32 = 1280;
-const TEX_HEIGHT: u32 = 720;
+const AGENT_COUNT: u32 = 1_000_000;
+const TEX_WIDTH: u32 = 2560;
+const TEX_HEIGHT: u32 = 1440;
 const SPECIES_COUNT: u32 = 16;
 const GLOBAL_SETTINGS: &GlobalSettings = &GlobalSettings {
     decay_rate: 0.5,

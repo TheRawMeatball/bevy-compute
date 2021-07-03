@@ -21,7 +21,7 @@ use bevy::{
         view::ExtractedWindows,
         RenderStage,
     },
-    window::WindowId,
+    window::{WindowId, WindowMode},
     PipelinedDefaultPlugins,
 };
 use rand::Rng;
@@ -35,6 +35,9 @@ use wgpu::{
 };
 use wgpu_types::ImageSubresourceRange;
 
+#[derive(Default)]
+struct Fullscreen(bool);
+
 #[bevy_main]
 pub fn main() {
     let mut app = App::new();
@@ -43,7 +46,8 @@ pub fn main() {
         height: 1080.,
         ..Default::default()
     })
-    .add_plugins(PipelinedDefaultPlugins);
+    .add_plugins(PipelinedDefaultPlugins)
+    .init_resource::<Fullscreen>();
 
     let render_app = app.sub_app_mut(0);
     render_app.add_system_to_stage(RenderStage::Extract, time_extract_system.system());
@@ -62,9 +66,26 @@ pub fn main() {
         .add_node_edge("mold", core_pipeline::node::MAIN_PASS_DEPENDENCIES)
         .unwrap();
 
-    app.add_startup_system(setup_system.system());
+    app.add_startup_system(setup_system.system())
+        .add_system(fullscreen_system.system());
 
     app.run();
+}
+
+fn fullscreen_system(
+    mut fs: ResMut<Fullscreen>,
+    inp: Res<Input<KeyCode>>,
+    mut windows: ResMut<Windows>,
+) {
+    if inp.just_pressed(KeyCode::F11) {
+        let primary = windows.get_primary_mut().unwrap();
+        fs.0 = !fs.0;
+        primary.set_mode(if fs.0 {
+            WindowMode::Fullscreen { use_size: false }
+        } else {
+            WindowMode::Windowed
+        });
+    }
 }
 
 fn setup_system(mut commands: Commands) {

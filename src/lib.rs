@@ -1,3 +1,15 @@
+const AGENT_COUNT: u32 = 1_000_000;
+const TEX_WIDTH: u32 = 2560;
+const TEX_HEIGHT: u32 = 1440;
+const SPECIES_COUNT: u32 = 16;
+const GLOBAL_SETTINGS: &GlobalSettings = &GlobalSettings {
+    decay_rate: 0.5,
+    diffuse_rate: 4.0,
+};
+const FIXED_DELTA_TIME: f32 = 1. / 50.;
+const RUNS_PER_FRAME: usize = 5;
+const SAVE_TO_DISK: bool = false;
+
 use core::panic;
 use std::{
     num::{NonZeroU32, NonZeroU64},
@@ -118,15 +130,6 @@ fn rgb(hue: f32) -> Vec3 {
         _ => panic!(),
     }
 }
-
-const AGENT_COUNT: u32 = 1_000_000;
-const TEX_WIDTH: u32 = 2560;
-const TEX_HEIGHT: u32 = 1440;
-const SPECIES_COUNT: u32 = 16;
-const GLOBAL_SETTINGS: &GlobalSettings = &GlobalSettings {
-    decay_rate: 0.5,
-    diffuse_rate: 4.0,
-};
 
 #[repr(C)]
 #[derive(bytemuck::Zeroable, bytemuck::Pod, Clone, Copy)]
@@ -808,8 +811,6 @@ impl FromWorld for MoldShaders {
     }
 }
 
-const FIXED_DELTA_TIME: f32 = 1. / 50.;
-
 pub struct MoldNode {
     inner: Mutex<MoldNodeInner>,
 }
@@ -823,9 +824,6 @@ enum ReadState {
     A,
     B,
 }
-
-const RUNS_PER_FRAME: usize = 5;
-const SAVE_TO_DISK: bool = false;
 
 impl Node for MoldNode {
     fn run(

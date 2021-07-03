@@ -4,7 +4,7 @@ use std::{
 };
 
 use bevy::{
-    math::f32,
+    math::{const_vec3, f32},
     prelude::*,
     render2::{
         core_pipeline,
@@ -33,7 +33,6 @@ use wgpu::{
     PolygonMode, PrimitiveState, PrimitiveTopology, RenderPassDescriptor, TextureDescriptor,
     TextureDimension, TextureUsage, TextureViewDescriptor,
 };
-use wgpu_types::ImageSubresourceRange;
 
 #[derive(Default)]
 struct Fullscreen(bool);
@@ -109,14 +108,37 @@ fn time_extract_system(time: Res<Time>, mut commands: Commands) {
 const AGENT_COUNT: u32 = 1_000_000;
 const TEX_WIDTH: u32 = 2560;
 const TEX_HEIGHT: u32 = 1440;
-const SPECIES: &[Settings] = &[Settings {
-    trail_weight: 5.0,
-    move_speed: 15.,
-    turn_speed: 15.,
-    sensor_angle_degrees: 30.,
-    sensor_offset: 25.,
-    sensor_size: 1,
-}];
+const SPECIES: &[Settings] = &[
+    Settings {
+        trail_weight: 5.0,
+        move_speed: 15.,
+        turn_speed: 15.,
+        sensor_angle_degrees: 30.,
+        sensor_offset: 25.,
+        sensor_size: 1,
+    },
+    Settings {
+        trail_weight: 5.0,
+        move_speed: 15.,
+        turn_speed: 15.,
+        sensor_angle_degrees: 30.,
+        sensor_offset: 25.,
+        sensor_size: 1,
+    },
+];
+const DISPLAY_SETTINGS: &[DisplaySettings] = &[
+    DisplaySettings {
+        color: const_vec3!([0.2, 0.8, 0.8]),
+        weight: 1.0,
+    },
+    DisplaySettings {
+        color: const_vec3!([0.2, 0.2, 0.9]),
+        weight: 1.0,
+    },
+];
+const _ASSERT_SPECIES_ARRAY_MATCH: () = {
+    let _ = [0][DISPLAY_SETTINGS.len() - SPECIES.len()];
+};
 const SPECIES_COUNT: u32 = SPECIES.len() as u32;
 const GLOBAL_SETTINGS: &GlobalSettings = &GlobalSettings {
     decay_rate: 0.5,
@@ -147,6 +169,13 @@ struct Settings {
 struct GlobalSettings {
     decay_rate: f32,
     diffuse_rate: f32,
+}
+
+#[repr(C)]
+#[derive(bytemuck::Zeroable, bytemuck::Pod, Clone, Copy)]
+struct DisplaySettings {
+    color: Vec3,
+    weight: f32,
 }
 
 pub struct MoldShaders {
@@ -207,7 +236,10 @@ impl FromWorld for MoldShaders {
 
         let mut rng = rand::thread_rng();
         let agents = (0..AGENT_COUNT)
-            .map(|_| Agent::gen_circle(&mut rng, 520.))
+            .map(|i| Agent {
+                species: i as i32 % 2,
+                ..Agent::gen_circle(&mut rng, 520.)
+            })
             .collect::<Vec<_>>();
         let agent_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
             label: Some("mold_agents"),
@@ -220,6 +252,12 @@ impl FromWorld for MoldShaders {
             contents: bytemuck::cast_slice(SPECIES),
             usage: BufferUsage::STORAGE,
         });
+        let display_settings_buffer =
+            render_device.create_buffer_with_data(&BufferInitDescriptor {
+                label: Some("display_species_settings"),
+                contents: bytemuck::cast_slice(DISPLAY_SETTINGS),
+                usage: BufferUsage::STORAGE,
+            });
         let global_settings_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
             label: Some("global_settings"),
             contents: bytemuck::bytes_of(GLOBAL_SETTINGS),
@@ -241,10 +279,12 @@ impl FromWorld for MoldShaders {
         };
         let primary_texture_a = render_device.create_texture(&TextureDescriptor {
             label: Some("trail_map_a"),
+            usage: TextureUsage::STORAGE | TextureUsage::COPY_SRC,
             ..texture_descriptor
         });
         let primary_texture_b = render_device.create_texture(&TextureDescriptor {
             label: Some("trail_map_b"),
+            usage: TextureUsage::STORAGE | TextureUsage::COPY_SRC,
             ..texture_descriptor
         });
         let update_texture = render_device.create_texture(&TextureDescriptor {
@@ -540,33 +580,65 @@ impl FromWorld for MoldShaders {
         let display_bgl =
             render_device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("mold_display_bgl"),
-                entries: &[BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: ShaderStage::FRAGMENT,
-                    ty: BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::ReadOnly,
-                        format: TextureFormat::R32Float,
-                        view_dimension: TextureViewDimension::D2Array,
+                entries: &[
+                    BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: ShaderStage::FRAGMENT,
+                        ty: BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::ReadOnly,
+                            format: TextureFormat::R32Float,
+                            view_dimension: TextureViewDimension::D2Array,
+                        },
+                        count: None,
                     },
-                    count: None,
-                }],
+                    BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: ShaderStage::FRAGMENT,
+                        ty: BindingType::Buffer {
+                            ty: BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: NonZeroU64::new(16),
+                        },
+                        count: None,
+                    },
+                ],
             });
 
         let display_bg_a = render_device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("mold_display_bg_a"),
             layout: &display_bgl,
-            entries: &[BindGroupEntry {
-                binding: 0,
-                resource: BindingResource::TextureView(&primary_view_a),
-            }],
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::TextureView(&primary_view_a),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::Buffer(BufferBinding {
+                        buffer: &display_settings_buffer,
+                        offset: 0,
+                        size: None,
+                    }),
+                },
+            ],
         });
         let display_bg_b = render_device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("mold_display_bg_b"),
             layout: &display_bgl,
-            entries: &[BindGroupEntry {
-                binding: 0,
-                resource: BindingResource::TextureView(&primary_view_b),
-            }],
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::TextureView(&primary_view_b),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::Buffer(BufferBinding {
+                        buffer: &display_settings_buffer,
+                        offset: 0,
+                        size: None,
+                    }),
+                },
+            ],
         });
 
         let display_l = render_device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {

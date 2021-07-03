@@ -76,12 +76,18 @@ fn sense(agent: Agent, sensor_angle_offset: f32) -> f32 {
     var sum: f32 = 0.0;
 
     let dim = vec2<i32>(textureDimensions(m_texture_r));
-    let sensor_size = 1;//settings.sensor_size;
-    for (var offset_x: i32 = -sensor_size; offset_x <= sensor_size; offset_x = offset_x + 1) {
-        for (var offset_y: i32 = -sensor_size; offset_y <= sensor_size; offset_y = offset_y + 1) {
-            let offset = vec2<i32>(offset_x, offset_y);
-            let sample = clamp(sensor_center + offset, vec2<i32>(0), dim - vec2<i32>(1));
-            sum = sum + textureLoad(m_texture_r, sample, agent.species).x;
+    let sensor_size = settings.sensor_size;
+
+    let species_count = i32(arrayLength(&m_agent_settings.settings));
+
+    for (var species: i32 = 0; species <= species_count; species = species + 1) {
+        let mask = f32(i32(species == agent.species) * 2 - 1);
+        for (var offset_x: i32 = -sensor_size; offset_x <= sensor_size; offset_x = offset_x + 1) {
+            for (var offset_y: i32 = -sensor_size; offset_y <= sensor_size; offset_y = offset_y + 1) {
+                let offset = vec2<i32>(offset_x, offset_y);
+                let sample = clamp(sensor_center + offset, vec2<i32>(0), dim - vec2<i32>(1));
+                sum = sum + mask * textureLoad(m_texture_r, sample, species).x;
+            }
         }
     }
 

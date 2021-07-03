@@ -9,6 +9,7 @@ const GLOBAL_SETTINGS: &GlobalSettings = &GlobalSettings {
 const FIXED_DELTA_TIME: f32 = 1. / 50.;
 const RUNS_PER_FRAME: usize = 5;
 const SAVE_TO_DISK: bool = false;
+// species' settings generated at start of from_world for MoldShaders
 
 use core::panic;
 use std::{

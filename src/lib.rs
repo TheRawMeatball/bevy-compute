@@ -213,7 +213,6 @@ impl Agent {
     }
 }
 
-// TODO: this pattern for initializing the shaders / pipeline isn't ideal. this should be handled by the asset system
 impl FromWorld for MoldShaders {
     fn from_world(world: &mut World) -> Self {
         let render_device = world.get_resource::<RenderDevice>().unwrap();

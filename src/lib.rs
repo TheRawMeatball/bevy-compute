@@ -13,11 +13,11 @@ use bevy::{
             BindGroup, BindGroupLayoutEntry, BindingType, BlendComponent, BlendFactor,
             BlendOperation, BlendState, Buffer, BufferBindingType, BufferSize, ColorTargetState,
             ColorWrite, ComputePipeline, RenderPipeline, ShaderStage, Texture, TextureFormat,
-            TextureView, TextureViewDimension, VertexState,
+            TextureViewDimension, VertexState,
         },
         renderer::{RenderContext, RenderDevice, RenderQueue},
         shader::Shader,
-        texture::{BevyDefault, GpuImage, Image, TextureFormatPixelInfo},
+        texture::BevyDefault,
         view::ExtractedWindows,
         RenderStage,
     },
@@ -27,11 +27,11 @@ use bevy::{
 use rand::Rng;
 use wgpu::{
     util::BufferInitDescriptor, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor,
-    BindingResource, BufferBinding, BufferDescriptor, BufferUsage, CommandEncoderDescriptor,
-    ComputePassDescriptor, Extent3d, Face, FragmentState, FrontFace, ImageCopyBuffer,
-    ImageCopyTexture, ImageDataLayout, LoadOp, MapMode, MultisampleState, Operations, Origin3d,
-    PolygonMode, PrimitiveState, PrimitiveTopology, RenderPassDescriptor, TextureDescriptor,
-    TextureDimension, TextureUsage, TextureViewDescriptor,
+    BindingResource, BufferBinding, BufferDescriptor, BufferUsage, ComputePassDescriptor, Extent3d,
+    Face, FragmentState, FrontFace, ImageCopyBuffer, ImageCopyTexture, ImageDataLayout, LoadOp,
+    MapMode, MultisampleState, Operations, Origin3d, PolygonMode, PrimitiveState,
+    PrimitiveTopology, RenderPassDescriptor, TextureDescriptor, TextureUsage,
+    TextureViewDescriptor,
 };
 
 #[derive(Default)]
@@ -105,9 +105,9 @@ fn time_extract_system(time: Res<Time>, mut commands: Commands) {
     });
 }
 
-const AGENT_COUNT: u32 = 1_000_000;
-const TEX_WIDTH: u32 = 2560;
-const TEX_HEIGHT: u32 = 1440;
+const AGENT_COUNT: u32 = 200_000;
+const TEX_WIDTH: u32 = 1280;
+const TEX_HEIGHT: u32 = 720;
 const SPECIES: &[Settings] = &[Settings {
     trail_weight: 5.0,
     move_speed: 15.,
@@ -188,12 +188,14 @@ pub struct MoldShaders {
     blur_bg_a: BindGroup,
     blur_bg_b: BindGroup,
 
-    display_pipeline: RenderPipeline,
-    display_bg_a: BindGroup,
-    display_bg_b: BindGroup,
+    combine_pipeline: ComputePipeline,
+    combine_bg_a: BindGroup,
+    combine_bg_b: BindGroup,
 
-    primary_texture_a: Texture,
-    primary_texture_b: Texture,
+    display_pipeline: RenderPipeline,
+    display_bg: BindGroup,
+
+    combine_texture: Texture,
     update_texture: Texture,
 
     time_buffer: Buffer,
@@ -254,9 +256,9 @@ impl FromWorld for MoldShaders {
             contents: bytemuck::cast_slice(SPECIES),
             usage: BufferUsage::STORAGE,
         });
-        let display_settings_buffer =
+        let combine_settings_buffer =
             render_device.create_buffer_with_data(&BufferInitDescriptor {
-                label: Some("display_species_settings"),
+                label: Some("combine_species_settings"),
                 contents: bytemuck::cast_slice(DISPLAY_SETTINGS),
                 usage: BufferUsage::STORAGE,
             });
@@ -298,6 +300,17 @@ impl FromWorld for MoldShaders {
             },
             ..texture_descriptor
         });
+        let combine_texture = render_device.create_texture(&TextureDescriptor {
+            label: Some("combine_texture"),
+            usage: TextureUsage::STORAGE | TextureUsage::COPY_SRC,
+            format: TextureFormat::Rgba8Unorm,
+            size: Extent3d {
+                width: TEX_WIDTH,
+                height: TEX_HEIGHT,
+                depth_or_array_layers: 1,
+            },
+            ..texture_descriptor
+        });
 
         let texture_view_descriptor = TextureViewDescriptor {
             label: None,
@@ -321,6 +334,13 @@ impl FromWorld for MoldShaders {
             label: Some("update_write_view"),
             format: Some(TextureFormat::R32Float),
             array_layer_count: NonZeroU32::new(SPECIES_COUNT),
+            ..texture_view_descriptor
+        });
+        let combine_view = combine_texture.create_view(&TextureViewDescriptor {
+            label: Some("combine_view"),
+            format: Some(TextureFormat::Rgba8Unorm),
+            dimension: Some(TextureViewDimension::D2),
+            array_layer_count: NonZeroU32::new(1),
             ..texture_view_descriptor
         });
 
@@ -585,13 +605,23 @@ impl FromWorld for MoldShaders {
                 entry_point: "blur",
             });
 
-        let display_bgl =
+        let combine_bgl =
             render_device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("mold_display_bgl"),
+                label: Some("mold_combine_bgl"),
                 entries: &[
                     BindGroupLayoutEntry {
                         binding: 0,
-                        visibility: ShaderStage::FRAGMENT,
+                        visibility: ShaderStage::COMPUTE,
+                        ty: BindingType::Buffer {
+                            ty: BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: NonZeroU64::new(16),
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: ShaderStage::COMPUTE,
                         ty: BindingType::StorageTexture {
                             access: wgpu::StorageTextureAccess::ReadOnly,
                             format: TextureFormat::Rgba16Float,
@@ -600,53 +630,99 @@ impl FromWorld for MoldShaders {
                         count: None,
                     },
                     BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: ShaderStage::FRAGMENT,
-                        ty: BindingType::Buffer {
-                            ty: BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: NonZeroU64::new(16),
+                        binding: 2,
+                        visibility: ShaderStage::COMPUTE,
+                        ty: BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::WriteOnly,
+                            format: TextureFormat::Rgba8Unorm,
+                            view_dimension: TextureViewDimension::D2,
                         },
                         count: None,
                     },
                 ],
             });
 
-        let display_bg_a = render_device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("mold_display_bg_a"),
-            layout: &display_bgl,
+        let combine_bg_a = render_device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("mold_combine_bg_a"),
+            layout: &combine_bgl,
             entries: &[
                 BindGroupEntry {
                     binding: 0,
+                    resource: BindingResource::Buffer(BufferBinding {
+                        buffer: &combine_settings_buffer,
+                        offset: 0,
+                        size: None,
+                    }),
+                },
+                BindGroupEntry {
+                    binding: 1,
                     resource: BindingResource::TextureView(&primary_view_a),
                 },
                 BindGroupEntry {
-                    binding: 1,
-                    resource: BindingResource::Buffer(BufferBinding {
-                        buffer: &display_settings_buffer,
-                        offset: 0,
-                        size: None,
-                    }),
+                    binding: 2,
+                    resource: BindingResource::TextureView(&combine_view),
                 },
             ],
         });
-        let display_bg_b = render_device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("mold_display_bg_b"),
-            layout: &display_bgl,
+        let combine_bg_b = render_device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("mold_combine_bg_b"),
+            layout: &combine_bgl,
             entries: &[
                 BindGroupEntry {
                     binding: 0,
-                    resource: BindingResource::TextureView(&primary_view_b),
-                },
-                BindGroupEntry {
-                    binding: 1,
                     resource: BindingResource::Buffer(BufferBinding {
-                        buffer: &display_settings_buffer,
+                        buffer: &combine_settings_buffer,
                         offset: 0,
                         size: None,
                     }),
                 },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::TextureView(&primary_view_b),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::TextureView(&combine_view),
+                },
             ],
+        });
+
+        let combine_l = render_device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("combine_l"),
+            push_constant_ranges: &[],
+            bind_group_layouts: &[&combine_bgl],
+        });
+
+        let combine_pipeline =
+            render_device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("combine"),
+                layout: Some(&combine_l),
+                module: &shader_module,
+                entry_point: "combine",
+            });
+
+        let display_bgl =
+            render_device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("mold_bgl"),
+                entries: &[BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStage::FRAGMENT,
+                    ty: BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::ReadOnly,
+                        format: TextureFormat::Rgba8Unorm,
+                        view_dimension: TextureViewDimension::D2,
+                    },
+                    count: None,
+                }],
+            });
+
+        let display_bg = render_device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("mold_display_bg"),
+            layout: &display_bgl,
+            entries: &[BindGroupEntry {
+                binding: 0,
+                resource: BindingResource::TextureView(&combine_view),
+            }],
         });
 
         let display_l = render_device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -713,12 +789,14 @@ impl FromWorld for MoldShaders {
             blur_bg_a,
             blur_bg_b,
 
-            display_pipeline,
-            display_bg_a,
-            display_bg_b,
+            combine_pipeline,
+            combine_bg_a,
+            combine_bg_b,
 
-            primary_texture_a,
-            primary_texture_b,
+            display_pipeline,
+            display_bg,
+
+            combine_texture,
             update_texture,
 
             read_buffer,
@@ -745,6 +823,7 @@ enum ReadState {
 }
 
 const RUNS_PER_FRAME: usize = 5;
+const SAVE_TO_DISK: bool = false;
 
 impl Node for MoldNode {
     fn run(
@@ -813,52 +892,70 @@ impl Node for MoldNode {
             };
         }
 
-        /*save to file section*//*
-                render_context.command_encoder.copy_texture_to_buffer(
-                    ImageCopyTexture {
-                        texture: &shaders.blur_write_texture,
-                        mip_level: 0,
-                        origin: Origin3d::ZERO,
+        let mut pass = render_context
+            .command_encoder
+            .begin_compute_pass(&ComputePassDescriptor {
+                label: Some("run-combine"),
+            });
+
+        pass.set_pipeline(&shaders.combine_pipeline);
+        pass.set_bind_group(
+            0,
+            match this.state {
+                ReadState::A => shaders.combine_bg_a.value(),
+                ReadState::B => shaders.combine_bg_b.value(),
+            },
+            &[],
+        );
+        pass.dispatch(div_ceil(TEX_WIDTH, 32), div_ceil(TEX_HEIGHT, 32), 1);
+
+        drop(pass);
+        if SAVE_TO_DISK {
+            render_context.command_encoder.copy_texture_to_buffer(
+                ImageCopyTexture {
+                    texture: &shaders.combine_texture,
+                    mip_level: 0,
+                    origin: Origin3d::ZERO,
+                },
+                ImageCopyBuffer {
+                    buffer: &shaders.read_buffer,
+                    layout: ImageDataLayout {
+                        offset: 0,
+                        bytes_per_row: NonZeroU32::new(4 * TEX_WIDTH),
+                        rows_per_image: NonZeroU32::new(TEX_HEIGHT),
                     },
-                    ImageCopyBuffer {
-                        buffer: &shaders.read_buffer,
-                        layout: ImageDataLayout {
-                            offset: 0,
-                            bytes_per_row: NonZeroU32::new(4 * TEX_WIDTH),
-                            rows_per_image: NonZeroU32::new(TEX_HEIGHT),
-                        },
-                    },
-                    Extent3d {
-                        width: TEX_WIDTH,
-                        height: TEX_HEIGHT,
-                        depth_or_array_layers: 1,
-                    },
-                );
+                },
+                Extent3d {
+                    width: TEX_WIDTH,
+                    height: TEX_HEIGHT,
+                    depth_or_array_layers: 1,
+                },
+            );
 
-                let slice = shaders.read_buffer.slice(..);
-                render_context
-                    .render_device
-                    .map_buffer(&slice, MapMode::Read);
-                let view = slice.get_mapped_range();
+            let slice = shaders.read_buffer.slice(..);
+            render_context
+                .render_device
+                .map_buffer(&slice, MapMode::Read);
+            let view = slice.get_mapped_range();
 
-                let filepath = format!(
-                    "/mnt/33CA263211FBF90F/images/frame_{}.png",
-                    (self.time / FIXED_DELTA_TIME) as u32 - 1
-                );
+            let filepath = format!(
+                "images/frame_{}.png",
+                (this.time / (FIXED_DELTA_TIME * RUNS_PER_FRAME as f32)) as u32 - 1
+            );
 
-                // image::save_buffer_with_format(
-                //     filepath,
-                //     &view,
-                //     TEX_WIDTH,
-                //     TEX_HEIGHT,
-                //     image::ColorType::L16,
-                //     image::ImageFormat::Png,
-                // );
+            image::save_buffer_with_format(
+                filepath,
+                &view,
+                TEX_WIDTH,
+                TEX_HEIGHT,
+                image::ColorType::Rgba8,
+                image::ImageFormat::Png,
+            )
+            .unwrap();
 
-                drop(view);
-                shaders.read_buffer.unmap();
-        */
-
+            drop(view);
+            shaders.read_buffer.unmap();
+        }
         let ew = &world.get_resource::<ExtractedWindows>().unwrap().windows[&WindowId::primary()];
         let swapchain = ew.swap_chain_frame.as_ref().unwrap();
         let mut pass = render_context
@@ -877,14 +974,7 @@ impl Node for MoldNode {
             });
 
         pass.set_pipeline(&shaders.display_pipeline);
-        pass.set_bind_group(
-            0,
-            match this.state {
-                ReadState::A => shaders.display_bg_a.value(),
-                ReadState::B => shaders.display_bg_b.value(),
-            },
-            &[],
-        );
+        pass.set_bind_group(0, shaders.display_bg.value(), &[]);
         pass.draw(0..3, 0..1);
         drop(pass);
         Ok(())

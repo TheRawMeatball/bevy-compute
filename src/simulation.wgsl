@@ -223,3 +223,53 @@ fn blur(
     let out = max(vec4<f32>(0.0), blurred_color - decay_rate * time.delta);
     textureStore(b_texture_w, coords, species_group_id, out);
 }
+
+struct DispSettings {
+    color: vec3<f32>;
+    weight: f32;
+};
+
+[[block]]
+struct DispSettingsBuffer {
+    settings: array<DispSettings>;
+};
+
+[[group(0), binding(0)]]
+var<storage> c_disp_settings: [[access(read)]] DispSettingsBuffer;
+[[group(0), binding(1)]]
+var c_texture: [[access(read)]] texture_storage_2d_array<rgba16float>;
+[[group(0), binding(2)]]
+var c_disp_texture: [[access(write)]] texture_storage_2d<rgba8unorm>;
+
+[[stage(compute), workgroup_size(32, 32)]]
+fn combine(
+    [[builtin(global_invocation_id)]] id: vec3<u32>,
+)  {
+    let pos = vec2<i32>(id.xy);
+    let species_count = i32(arrayLength(&c_disp_settings.settings));
+    var col: vec3<f32> = vec3<f32>(0.0);
+    for(var i: i32 = 0; i < species_count / 4; i = i + 1) {
+        let vals = textureLoad(c_texture, pos, i);
+        col = col + c_disp_settings.settings[i * species_count + 0].color * vals.x;
+        col = col + c_disp_settings.settings[i * species_count + 1].color * vals.y;
+        col = col + c_disp_settings.settings[i * species_count + 2].color * vals.z;
+        col = col + c_disp_settings.settings[i * species_count + 3].color * vals.w;
+    }
+    let completed = (species_count / 4) * 4;
+    if (species_count % 4 != 0) {
+        let vals = textureLoad(c_texture, pos, species_count / 4);
+        if (completed + 2 < species_count) {
+            col = col + c_disp_settings.settings[completed + 0].color * vals.x;
+            col = col + c_disp_settings.settings[completed + 1].color * vals.y;
+            col = col + c_disp_settings.settings[completed + 2].color * vals.z;
+        }
+        elseif (completed + 1 < species_count) {
+            col = col + c_disp_settings.settings[completed + 0].color * vals.x;
+            col = col + c_disp_settings.settings[completed + 1].color * vals.y;
+        }
+        elseif (completed < species_count) {
+            col = col + c_disp_settings.settings[completed + 0].color * vals.x;
+        }
+    }
+    textureStore(c_disp_texture, pos, vec4<f32>(col, 1.0));
+}

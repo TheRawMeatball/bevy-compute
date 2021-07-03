@@ -179,13 +179,14 @@ var b_texture_w: [[access(write)]] texture_storage_2d_array<rgba16float>;
 fn fetch_color(coords: vec2<i32>, index: i32) -> vec4<f32> {
     let species_count = i32(textureNumLayers(b_texture_painted));
     var sum: vec4<f32> = textureLoad(b_texture_r, coords, index);
-    sum = sum + vec4<f32>(textureLoad(b_texture_painted, coords, index + 0).r, 0.0, 0.0, 0.0);
-    if (index + 1 >= species_count) { return min(vec4<f32>(1.0), sum); }
-    sum = sum + vec4<f32>(0.0, textureLoad(b_texture_painted, coords, index + 1).r, 0.0, 0.0);
-    if (index + 2 >= species_count) { return min(vec4<f32>(1.0), sum); }
-    sum = sum + vec4<f32>(0.0, 0.0, textureLoad(b_texture_painted, coords, index + 2).r, 0.0);
-    if (index + 3 >= species_count) { return min(vec4<f32>(1.0), sum); }
-    sum = sum + vec4<f32>(0.0, 0.0, 0.0, textureLoad(b_texture_painted, coords, index + 3).r);
+    let species = index * 4;
+    sum = sum + vec4<f32>(textureLoad(b_texture_painted, coords, species + 0).r, 0.0, 0.0, 0.0);
+    if (species + 1 >= species_count) { return min(vec4<f32>(1.0), sum); }
+    sum = sum + vec4<f32>(0.0, textureLoad(b_texture_painted, coords, species + 1).r, 0.0, 0.0);
+    if (species + 2 >= species_count) { return min(vec4<f32>(1.0), sum); }
+    sum = sum + vec4<f32>(0.0, 0.0, textureLoad(b_texture_painted, coords, species + 2).r, 0.0);
+    if (species + 3 >= species_count) { return min(vec4<f32>(1.0), sum); }
+    sum = sum + vec4<f32>(0.0, 0.0, 0.0, textureLoad(b_texture_painted, coords, species + 3).r);
     return min(vec4<f32>(1.0), sum);
 }
 

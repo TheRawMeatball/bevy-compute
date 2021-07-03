@@ -115,7 +115,7 @@ const SPECIES: &[Settings] = &[Settings {
     sensor_angle_degrees: 30.,
     sensor_offset: 25.,
     sensor_size: 1,
-}; 2];
+}; 5];
 const DISPLAY_SETTINGS: &[DisplaySettings] = &[
     DisplaySettings {
         color: const_vec3!([0.2, 0.8, 0.8]),
@@ -125,14 +125,18 @@ const DISPLAY_SETTINGS: &[DisplaySettings] = &[
         color: const_vec3!([0.2, 0.2, 0.9]),
         weight: 1.0,
     },
-    // DisplaySettings {
-    //     color: const_vec3!([0.7, 0.2, 0.9]),
-    //     weight: 1.0,
-    // },
-    // DisplaySettings {
-    //     color: const_vec3!([0.1, 0.9, 0.2]),
-    //     weight: 1.0,
-    // },
+    DisplaySettings {
+        color: const_vec3!([0.7, 0.2, 0.9]),
+        weight: 1.0,
+    },
+    DisplaySettings {
+        color: const_vec3!([0.1, 0.9, 0.2]),
+        weight: 1.0,
+    },
+    DisplaySettings {
+        color: const_vec3!([0.9, 0.5, 0.1]),
+        weight: 1.0,
+    },
 ];
 const _ASSERT_SPECIES_ARRAY_MATCH: () = {
     let _ = [0][DISPLAY_SETTINGS.len() - SPECIES.len()];

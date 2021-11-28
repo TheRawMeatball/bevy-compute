@@ -1,68 +1,74 @@
-const AGENT_COUNT: u32 = 1_000_000;
-const TEX_WIDTH: u32 = 2560;
-const TEX_HEIGHT: u32 = 1440;
-const SPECIES_COUNT: u32 = 16;
+const AGENT_COUNT: u32 = 500_000;
+const TEX_WIDTH: u32 = 1080;
+const TEX_HEIGHT: u32 = 1080;
+const SPECIES_COUNT: u32 = 8;
 const GLOBAL_SETTINGS: &GlobalSettings = &GlobalSettings {
     decay_rate: 0.5,
     diffuse_rate: 4.0,
 };
 const FIXED_DELTA_TIME: f32 = 1. / 50.;
 const RUNS_PER_FRAME: usize = 5;
-const SAVE_TO_DISK: bool = false;
+const SAVE_TO_DISK: Option<&str> = None;
 // species' settings generated at start of from_world for MoldShaders
 
 use core::panic;
 use std::{
+    borrow::Cow,
     num::{NonZeroU32, NonZeroU64},
+    path::Path,
     sync::Mutex,
 };
 
 use bevy::{
-    prelude::*,
+    core::Time,
+    core_pipeline,
+    ecs::prelude::*,
+    input::prelude::*,
+    math::*,
+    prelude::App,
     render2::{
-        core_pipeline,
+        color::Color,
         render_graph::{Node, NodeRunError, RenderGraph, RenderGraphContext},
         render_resource::{
-            BindGroup, BindGroupLayoutEntry, BindingType, BlendComponent, BlendFactor,
-            BlendOperation, BlendState, Buffer, BufferBindingType, BufferSize, ColorTargetState,
-            ColorWrite, ComputePipeline, RenderPipeline, ShaderStage, Texture, TextureFormat,
-            TextureViewDimension, VertexState,
+            BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor,
+            BindGroupLayoutEntry, BindingResource, BindingType, BlendComponent, BlendFactor,
+            BlendOperation, BlendState, Buffer, BufferBindingType, BufferInitDescriptor,
+            BufferSize, BufferUsages, ColorTargetState, ColorWrites, ComputePassDescriptor,
+            ComputePipeline, ComputePipelineDescriptor, Extent3d, Face, FrontFace, ImageCopyBuffer,
+            ImageCopyTexture, ImageDataLayout, ImageSubresourceRange, LoadOp, MultisampleState,
+            Operations, Origin3d, PipelineLayoutDescriptor, PolygonMode, PrimitiveState,
+            PrimitiveTopology, RawFragmentState, RawRenderPipelineDescriptor, RawVertexState,
+            RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline, ShaderStages,
+            StorageTextureAccess, Texture, TextureAspect, TextureDescriptor, TextureDimension,
+            TextureFormat, TextureUsages, TextureViewDescriptor, TextureViewDimension,
         },
         renderer::{RenderContext, RenderDevice, RenderQueue},
-        shader::Shader,
         texture::BevyDefault,
         view::ExtractedWindows,
-        RenderStage,
+        RenderApp, RenderStage,
     },
-    window::{WindowId, WindowMode},
+    window::{WindowDescriptor, WindowId, WindowMode, Windows},
     PipelinedDefaultPlugins,
 };
 use rand::Rng;
-use wgpu::{
-    util::BufferInitDescriptor, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor,
-    BindingResource, BufferBinding, BufferDescriptor, BufferUsage, ComputePassDescriptor, Extent3d,
-    Face, FragmentState, FrontFace, ImageCopyBuffer, ImageCopyTexture, ImageDataLayout, LoadOp,
-    MapMode, MultisampleState, Operations, Origin3d, PolygonMode, PrimitiveState,
-    PrimitiveTopology, RenderPassDescriptor, TextureDescriptor, TextureUsage,
-    TextureViewDescriptor,
-};
+use wgpu::{BufferBinding, MapMode, ShaderModuleDescriptor, ShaderSource};
+use wgpu_types::BufferDescriptor;
 
 #[derive(Default)]
 struct Fullscreen(bool);
 
-#[bevy_main]
 pub fn main() {
     let mut app = App::new();
     app.insert_resource(WindowDescriptor {
-        width: 1920.,
+        width: 1080.,
         height: 1080.,
         ..Default::default()
     })
     .add_plugins(PipelinedDefaultPlugins)
     .init_resource::<Fullscreen>();
 
-    let render_app = app.sub_app_mut(0);
-    render_app.add_system_to_stage(RenderStage::Extract, time_extract_system.system());
+    let render_app = app.sub_app(RenderApp);
+    render_app.add_system_to_stage(RenderStage::Extract, time_extract_system);
     render_app.init_resource::<MoldShaders>();
     let mut graph = render_app.world.get_resource_mut::<RenderGraph>().unwrap();
     graph.add_node(
@@ -75,11 +81,15 @@ pub fn main() {
         },
     );
     graph
-        .add_node_edge("mold", core_pipeline::node::MAIN_PASS_DEPENDENCIES)
+        .add_node_edge(core_pipeline::node::MAIN_PASS_DRIVER, "mold")
         .unwrap();
 
-    app.add_startup_system(setup_system.system())
-        .add_system(fullscreen_system.system());
+    app.add_startup_system(setup_system)
+        .add_system(fullscreen_system);
+
+    if let Some(save_dir) = SAVE_TO_DISK {
+        std::fs::create_dir_all(save_dir).unwrap();
+    }
 
     app.run();
 }
@@ -217,11 +227,15 @@ impl Agent {
 impl FromWorld for MoldShaders {
     fn from_world(world: &mut World) -> Self {
         let render_device = world.get_resource::<RenderDevice>().unwrap();
-        let shader = Shader::from_wgsl(include_str!("simulation.wgsl"));
-        let shader_module = render_device.create_shader_module(&shader);
+        let shader_module = render_device.create_shader_module(&ShaderModuleDescriptor {
+            label: Some("simulation"),
+            source: ShaderSource::Wgsl(Cow::Borrowed(include_str!("simulation.wgsl"))),
+        });
 
-        let display_shader = Shader::from_wgsl(include_str!("display.wgsl"));
-        let display_shader_module = render_device.create_shader_module(&display_shader);
+        let display_shader_module = render_device.create_shader_module(&ShaderModuleDescriptor {
+            label: Some("display"),
+            source: ShaderSource::Wgsl(Cow::Borrowed(include_str!("display.wgsl"))),
+        });
 
         let mut rng = rand::thread_rng();
         let agents = (0..AGENT_COUNT)
@@ -232,7 +246,7 @@ impl FromWorld for MoldShaders {
             .collect::<Vec<_>>();
         let agent_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
             label: Some("mold_agents"),
-            usage: BufferUsage::STORAGE,
+            usage: BufferUsages::STORAGE,
             contents: bytemuck::cast_slice(&agents),
         });
 
@@ -259,18 +273,18 @@ impl FromWorld for MoldShaders {
         let settings_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
             label: Some("species_settings"),
             contents: bytemuck::cast_slice(&species),
-            usage: BufferUsage::STORAGE,
+            usage: BufferUsages::STORAGE,
         });
         let combine_settings_buffer =
             render_device.create_buffer_with_data(&BufferInitDescriptor {
                 label: Some("combine_species_settings"),
                 contents: bytemuck::cast_slice(&disp),
-                usage: BufferUsage::STORAGE,
+                usage: BufferUsages::STORAGE,
             });
         let global_settings_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
             label: Some("global_settings"),
             contents: bytemuck::bytes_of(GLOBAL_SETTINGS),
-            usage: BufferUsage::UNIFORM,
+            usage: BufferUsages::UNIFORM,
         });
 
         let texture_descriptor = TextureDescriptor {
@@ -282,9 +296,9 @@ impl FromWorld for MoldShaders {
             },
             mip_level_count: 1,
             sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
+            dimension: TextureDimension::D2,
             format: TextureFormat::Rgba16Float,
-            usage: TextureUsage::STORAGE,
+            usage: TextureUsages::STORAGE_BINDING,
         };
         let primary_texture_a = render_device.create_texture(&TextureDescriptor {
             label: Some("trail_map_a"),
@@ -296,7 +310,7 @@ impl FromWorld for MoldShaders {
         });
         let update_texture = render_device.create_texture(&TextureDescriptor {
             label: Some("update_write_trail_map"),
-            usage: TextureUsage::STORAGE | TextureUsage::COPY_DST,
+            usage: TextureUsages::STORAGE_BINDING | TextureUsages::COPY_DST,
             format: TextureFormat::R32Float,
             size: Extent3d {
                 width: TEX_WIDTH,
@@ -307,7 +321,7 @@ impl FromWorld for MoldShaders {
         });
         let combine_texture = render_device.create_texture(&TextureDescriptor {
             label: Some("combine_texture"),
-            usage: TextureUsage::STORAGE | TextureUsage::COPY_SRC,
+            usage: TextureUsages::STORAGE_BINDING | TextureUsages::COPY_SRC,
             format: TextureFormat::Rgba8Unorm,
             size: Extent3d {
                 width: TEX_WIDTH,
@@ -321,7 +335,7 @@ impl FromWorld for MoldShaders {
             label: None,
             format: Some(TextureFormat::Rgba16Float),
             dimension: Some(TextureViewDimension::D2Array),
-            aspect: wgpu::TextureAspect::All,
+            aspect: TextureAspect::All,
             base_mip_level: 0,
             mip_level_count: None,
             base_array_layer: 0,
@@ -352,14 +366,14 @@ impl FromWorld for MoldShaders {
         let time_buffer = render_device.create_buffer(&BufferDescriptor {
             label: Some("time_buffer"),
             size: 8,
-            usage: BufferUsage::COPY_DST | BufferUsage::UNIFORM,
+            usage: BufferUsages::COPY_DST | BufferUsages::UNIFORM,
             mapped_at_creation: false,
         });
         let time_bgl = render_device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("time_bgl"),
             entries: &[BindGroupLayoutEntry {
                 binding: 0,
-                visibility: ShaderStage::COMPUTE,
+                visibility: ShaderStages::COMPUTE,
                 ty: BindingType::Buffer {
                     ty: BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -381,12 +395,12 @@ impl FromWorld for MoldShaders {
             }],
         });
 
-        let update_bgl = render_device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        let update_bgl = render_device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("mold_update_bgl"),
             entries: &[
                 BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: ShaderStage::COMPUTE,
+                    visibility: ShaderStages::COMPUTE,
                     ty: BindingType::Buffer {
                         ty: BufferBindingType::Storage { read_only: false },
                         has_dynamic_offset: false,
@@ -396,7 +410,7 @@ impl FromWorld for MoldShaders {
                 },
                 BindGroupLayoutEntry {
                     binding: 1,
-                    visibility: ShaderStage::COMPUTE,
+                    visibility: ShaderStages::COMPUTE,
                     ty: BindingType::Buffer {
                         ty: BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
@@ -406,9 +420,9 @@ impl FromWorld for MoldShaders {
                 },
                 BindGroupLayoutEntry {
                     binding: 2,
-                    visibility: ShaderStage::COMPUTE,
+                    visibility: ShaderStages::COMPUTE,
                     ty: BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::ReadOnly,
+                        access: StorageTextureAccess::ReadOnly,
                         format: TextureFormat::Rgba16Float,
                         view_dimension: TextureViewDimension::D2Array,
                     },
@@ -416,9 +430,9 @@ impl FromWorld for MoldShaders {
                 },
                 BindGroupLayoutEntry {
                     binding: 3,
-                    visibility: ShaderStage::COMPUTE,
+                    visibility: ShaderStages::COMPUTE,
                     ty: BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        access: StorageTextureAccess::WriteOnly,
                         format: TextureFormat::R32Float,
                         view_dimension: TextureViewDimension::D2Array,
                     },
@@ -486,25 +500,24 @@ impl FromWorld for MoldShaders {
                 },
             ],
         });
-        let update_l = render_device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let update_l = render_device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("mold_update_l"),
             bind_group_layouts: &[&update_bgl, &time_bgl],
             push_constant_ranges: &[],
         });
-        let update_pipeline =
-            render_device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("mold_update"),
-                layout: Some(&update_l),
-                module: &shader_module,
-                entry_point: "update",
-            });
+        let update_pipeline = render_device.create_compute_pipeline(&ComputePipelineDescriptor {
+            label: Some("mold_update"),
+            layout: Some(&update_l),
+            module: &shader_module,
+            entry_point: "update",
+        });
 
-        let blur_bgl = render_device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        let blur_bgl = render_device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("mold_blur_bgl"),
             entries: &[
                 BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: ShaderStage::COMPUTE,
+                    visibility: ShaderStages::COMPUTE,
                     ty: BindingType::Buffer {
                         ty: BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -514,9 +527,9 @@ impl FromWorld for MoldShaders {
                 },
                 BindGroupLayoutEntry {
                     binding: 1,
-                    visibility: ShaderStage::COMPUTE,
+                    visibility: ShaderStages::COMPUTE,
                     ty: BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::ReadOnly,
+                        access: StorageTextureAccess::ReadOnly,
                         format: TextureFormat::Rgba16Float,
                         view_dimension: TextureViewDimension::D2Array,
                     },
@@ -524,9 +537,9 @@ impl FromWorld for MoldShaders {
                 },
                 BindGroupLayoutEntry {
                     binding: 2,
-                    visibility: ShaderStage::COMPUTE,
+                    visibility: ShaderStages::COMPUTE,
                     ty: BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::ReadOnly,
+                        access: StorageTextureAccess::ReadOnly,
                         format: TextureFormat::R32Float,
                         view_dimension: TextureViewDimension::D2Array,
                     },
@@ -534,9 +547,9 @@ impl FromWorld for MoldShaders {
                 },
                 BindGroupLayoutEntry {
                     binding: 3,
-                    visibility: ShaderStage::COMPUTE,
+                    visibility: ShaderStages::COMPUTE,
                     ty: BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        access: StorageTextureAccess::WriteOnly,
                         format: TextureFormat::Rgba16Float,
                         view_dimension: TextureViewDimension::D2Array,
                     },
@@ -596,58 +609,56 @@ impl FromWorld for MoldShaders {
                 },
             ],
         });
-        let blur_l = render_device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let blur_l = render_device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("mold_blur_l"),
             bind_group_layouts: &[&blur_bgl, &time_bgl],
             push_constant_ranges: &[],
         });
 
-        let blur_pipeline =
-            render_device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("mold_blur"),
-                layout: Some(&blur_l),
-                module: &shader_module,
-                entry_point: "blur",
-            });
+        let blur_pipeline = render_device.create_compute_pipeline(&ComputePipelineDescriptor {
+            label: Some("mold_blur"),
+            layout: Some(&blur_l),
+            module: &shader_module,
+            entry_point: "blur",
+        });
 
-        let combine_bgl =
-            render_device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("mold_combine_bgl"),
-                entries: &[
-                    BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: ShaderStage::COMPUTE,
-                        ty: BindingType::Buffer {
-                            ty: BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: NonZeroU64::new(16),
-                        },
-                        count: None,
+        let combine_bgl = render_device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("mold_combine_bgl"),
+            entries: &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: NonZeroU64::new(16),
                     },
-                    BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: ShaderStage::COMPUTE,
-                        ty: BindingType::StorageTexture {
-                            access: wgpu::StorageTextureAccess::ReadOnly,
-                            format: TextureFormat::Rgba16Float,
-                            view_dimension: TextureViewDimension::D2Array,
-                        },
-                        count: None,
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::StorageTexture {
+                        access: StorageTextureAccess::ReadOnly,
+                        format: TextureFormat::Rgba16Float,
+                        view_dimension: TextureViewDimension::D2Array,
                     },
-                    BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: ShaderStage::COMPUTE,
-                        ty: BindingType::StorageTexture {
-                            access: wgpu::StorageTextureAccess::WriteOnly,
-                            format: TextureFormat::Rgba8Unorm,
-                            view_dimension: TextureViewDimension::D2,
-                        },
-                        count: None,
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::StorageTexture {
+                        access: StorageTextureAccess::WriteOnly,
+                        format: TextureFormat::Rgba8Unorm,
+                        view_dimension: TextureViewDimension::D2,
                     },
-                ],
-            });
+                    count: None,
+                },
+            ],
+        });
 
-        let combine_bg_a = render_device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let combine_bg_a = render_device.create_bind_group(&BindGroupDescriptor {
             label: Some("mold_combine_bg_a"),
             layout: &combine_bgl,
             entries: &[
@@ -669,7 +680,7 @@ impl FromWorld for MoldShaders {
                 },
             ],
         });
-        let combine_bg_b = render_device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let combine_bg_b = render_device.create_bind_group(&BindGroupDescriptor {
             label: Some("mold_combine_bg_b"),
             layout: &combine_bgl,
             entries: &[
@@ -692,36 +703,34 @@ impl FromWorld for MoldShaders {
             ],
         });
 
-        let combine_l = render_device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let combine_l = render_device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("combine_l"),
             push_constant_ranges: &[],
             bind_group_layouts: &[&combine_bgl],
         });
 
-        let combine_pipeline =
-            render_device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("combine"),
-                layout: Some(&combine_l),
-                module: &shader_module,
-                entry_point: "combine",
-            });
+        let combine_pipeline = render_device.create_compute_pipeline(&ComputePipelineDescriptor {
+            label: Some("combine"),
+            layout: Some(&combine_l),
+            module: &shader_module,
+            entry_point: "combine",
+        });
 
-        let display_bgl =
-            render_device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("mold_bgl"),
-                entries: &[BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: ShaderStage::FRAGMENT,
-                    ty: BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::ReadOnly,
-                        format: TextureFormat::Rgba8Unorm,
-                        view_dimension: TextureViewDimension::D2,
-                    },
-                    count: None,
-                }],
-            });
+        let display_bgl = render_device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("mold_bgl"),
+            entries: &[BindGroupLayoutEntry {
+                binding: 0,
+                visibility: ShaderStages::FRAGMENT,
+                ty: BindingType::StorageTexture {
+                    access: StorageTextureAccess::ReadOnly,
+                    format: TextureFormat::Rgba8Unorm,
+                    view_dimension: TextureViewDimension::D2,
+                },
+                count: None,
+            }],
+        });
 
-        let display_bg = render_device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let display_bg = render_device.create_bind_group(&BindGroupDescriptor {
             label: Some("mold_display_bg"),
             layout: &display_bgl,
             entries: &[BindGroupEntry {
@@ -730,58 +739,57 @@ impl FromWorld for MoldShaders {
             }],
         });
 
-        let display_l = render_device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let display_l = render_device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: None,
             push_constant_ranges: &[],
             bind_group_layouts: &[&display_bgl],
         });
 
-        let display_pipeline =
-            render_device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: None,
-                vertex: VertexState {
-                    buffers: &[],
-                    module: &display_shader_module,
-                    entry_point: "vs_main",
-                },
-                fragment: Some(FragmentState {
-                    module: &display_shader_module,
-                    entry_point: "fs_main",
-                    targets: &[ColorTargetState {
-                        format: TextureFormat::bevy_default(),
-                        blend: Some(BlendState {
-                            color: BlendComponent {
-                                src_factor: BlendFactor::Src,
-                                dst_factor: BlendFactor::OneMinusSrc,
-                                operation: BlendOperation::Add,
-                            },
-                            alpha: BlendComponent {
-                                src_factor: BlendFactor::One,
-                                dst_factor: BlendFactor::One,
-                                operation: BlendOperation::Add,
-                            },
-                        }),
-                        write_mask: ColorWrite::ALL,
-                    }],
-                }),
-                depth_stencil: None,
-                layout: Some(&display_l),
-                multisample: MultisampleState::default(),
-                primitive: PrimitiveState {
-                    topology: PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: FrontFace::Ccw,
-                    cull_mode: Some(Face::Back),
-                    polygon_mode: PolygonMode::Fill,
-                    clamp_depth: false,
-                    conservative: false,
-                },
-            });
+        let display_pipeline = render_device.create_render_pipeline(&RawRenderPipelineDescriptor {
+            label: None,
+            vertex: RawVertexState {
+                buffers: &[],
+                module: &display_shader_module,
+                entry_point: "vs_main",
+            },
+            fragment: Some(RawFragmentState {
+                module: &display_shader_module,
+                entry_point: "fs_main",
+                targets: &[ColorTargetState {
+                    format: TextureFormat::bevy_default(),
+                    blend: Some(BlendState {
+                        color: BlendComponent {
+                            src_factor: BlendFactor::Src,
+                            dst_factor: BlendFactor::OneMinusSrc,
+                            operation: BlendOperation::Add,
+                        },
+                        alpha: BlendComponent {
+                            src_factor: BlendFactor::One,
+                            dst_factor: BlendFactor::One,
+                            operation: BlendOperation::Add,
+                        },
+                    }),
+                    write_mask: ColorWrites::ALL,
+                }],
+            }),
+            depth_stencil: None,
+            layout: Some(&display_l),
+            multisample: MultisampleState::default(),
+            primitive: PrimitiveState {
+                topology: PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: FrontFace::Ccw,
+                cull_mode: Some(Face::Back),
+                polygon_mode: PolygonMode::Fill,
+                clamp_depth: false,
+                conservative: false,
+            },
+        });
 
         let read_buffer = render_device.create_buffer(&BufferDescriptor {
             label: Some("fetch_buffer"),
             size: 4 * (TEX_WIDTH * TEX_HEIGHT) as u64,
-            usage: BufferUsage::COPY_DST | BufferUsage::MAP_READ,
+            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
 
@@ -853,11 +861,11 @@ impl Node for MoldNode {
                         label: Some("run-update"),
                     });
 
-            pass.set_bind_group(1, shaders.time_bg.value(), &[]);
+            pass.set_bind_group(1, &shaders.time_bg, &[]);
 
             let (update_bg, blur_bg) = match this.state {
-                ReadState::A => (shaders.update_bg_a.value(), shaders.blur_bg_a.value()),
-                ReadState::B => (shaders.update_bg_b.value(), shaders.blur_bg_b.value()),
+                ReadState::A => (&shaders.update_bg_a, &shaders.blur_bg_a),
+                ReadState::B => (&shaders.update_bg_b, &shaders.blur_bg_b),
             };
 
             pass.set_pipeline(&shaders.update_pipeline);
@@ -876,8 +884,8 @@ impl Node for MoldNode {
 
             render_context.command_encoder.clear_texture(
                 &shaders.update_texture,
-                &wgpu_types::ImageSubresourceRange {
-                    aspect: wgpu::TextureAspect::All,
+                &ImageSubresourceRange {
+                    aspect: TextureAspect::All,
                     base_mip_level: 0,
                     mip_level_count: None,
                     base_array_layer: 0,
@@ -902,20 +910,21 @@ impl Node for MoldNode {
         pass.set_bind_group(
             0,
             match this.state {
-                ReadState::A => shaders.combine_bg_a.value(),
-                ReadState::B => shaders.combine_bg_b.value(),
+                ReadState::A => &shaders.combine_bg_a,
+                ReadState::B => &shaders.combine_bg_b,
             },
             &[],
         );
         pass.dispatch(div_ceil(TEX_WIDTH, 32), div_ceil(TEX_HEIGHT, 32), 1);
 
         drop(pass);
-        if SAVE_TO_DISK {
+        if let Some(save_path) = SAVE_TO_DISK {
             render_context.command_encoder.copy_texture_to_buffer(
                 ImageCopyTexture {
                     texture: &shaders.combine_texture,
                     mip_level: 0,
                     origin: Origin3d::ZERO,
+                    aspect: TextureAspect::All,
                 },
                 ImageCopyBuffer {
                     buffer: &shaders.read_buffer,
@@ -938,10 +947,11 @@ impl Node for MoldNode {
                 .map_buffer(&slice, MapMode::Read);
             let view = slice.get_mapped_range();
 
-            let filepath = format!(
-                "images/frame_{}.png",
+            let save_dir = Path::new(save_path);
+            let filepath = save_dir.join(format!(
+                "frame_{}.png",
                 (this.time / (FIXED_DELTA_TIME * RUNS_PER_FRAME as f32)) as u32 - 1
-            );
+            ));
 
             image::save_buffer_with_format(
                 filepath,
@@ -957,26 +967,28 @@ impl Node for MoldNode {
             shaders.read_buffer.unmap();
         }
         let ew = &world.get_resource::<ExtractedWindows>().unwrap().windows[&WindowId::primary()];
-        let swapchain = ew.swap_chain_frame.as_ref().unwrap();
-        let mut pass = render_context
-            .command_encoder
-            .begin_render_pass(&RenderPassDescriptor {
-                label: Some("mold_display"),
-                color_attachments: &[wgpu::RenderPassColorAttachment {
-                    view: swapchain,
-                    resolve_target: None,
-                    ops: Operations {
-                        load: LoadOp::Clear(wgpu::Color::BLACK),
-                        store: true,
-                    },
-                }],
-                depth_stencil_attachment: None,
-            });
 
-        pass.set_pipeline(&shaders.display_pipeline);
-        pass.set_bind_group(0, shaders.display_bg.value(), &[]);
-        pass.draw(0..3, 0..1);
-        drop(pass);
+        if let Some(swapchain) = &ew.swap_chain_texture {
+            let mut pass =
+                render_context
+                    .command_encoder
+                    .begin_render_pass(&RenderPassDescriptor {
+                        label: Some("mold_display"),
+                        color_attachments: &[RenderPassColorAttachment {
+                            view: swapchain,
+                            resolve_target: None,
+                            ops: Operations {
+                                load: LoadOp::Clear(Color::BLACK.into()),
+                                store: true,
+                            },
+                        }],
+                        depth_stencil_attachment: None,
+                    });
+            pass.set_pipeline(&shaders.display_pipeline);
+            pass.set_bind_group(0, &shaders.display_bg, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
         Ok(())
     }
 }

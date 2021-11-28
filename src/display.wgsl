@@ -14,7 +14,7 @@ fn vs_main([[builtin(vertex_index)]] in_vertex_index: u32) -> VertexOutput {
 }
 
 [[group(0), binding(0)]]
-var texture: [[access(read)]] texture_storage_2d<rgba8unorm>;
+var texture: texture_storage_2d<rgba8unorm, read>;
 
 fn get_avgd_col(uv: vec2<f32>) -> vec3<f32> {
     let dimensions = textureDimensions(texture);

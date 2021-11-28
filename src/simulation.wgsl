@@ -56,13 +56,13 @@ var<uniform> time: Time;
 
 
 [[group(0), binding(0)]]
-var<storage> m_agents: [[access(read_write)]] AgentBuffer;
+var<storage, read_write> m_agents: AgentBuffer;
 [[group(0), binding(1)]]
-var<storage> m_agent_settings: [[access(read)]] AgentSettingsBuffer;
+var<storage, read> m_agent_settings: AgentSettingsBuffer;
 [[group(0), binding(2)]]
-var m_texture_r: [[access(read)]] texture_storage_2d_array<rgba16float>;
+var m_texture_r: texture_storage_2d_array<rgba16float, read>;
 [[group(0), binding(3)]]
-var m_texture_w: [[access(write)]] texture_storage_2d_array<r32float>;
+var m_texture_w: texture_storage_2d_array<r32float, write>;
 
 fn sense(agent: Agent, sensor_angle_offset: f32) -> f32 {
     let settings = m_agent_settings.settings[agent.species];
@@ -173,11 +173,11 @@ fn update(
 var<uniform> b_settings: GlobalSettings;
 
 [[group(0), binding(1)]]
-var b_texture_r: [[access(read)]] texture_storage_2d_array<rgba16float>;
+var b_texture_r: texture_storage_2d_array<rgba16float, read>;
 [[group(0), binding(2)]]
-var b_texture_painted: [[access(read)]] texture_storage_2d_array<r32float>;
+var b_texture_painted: texture_storage_2d_array<r32float, read>;
 [[group(0), binding(3)]]
-var b_texture_w: [[access(write)]] texture_storage_2d_array<rgba16float>;
+var b_texture_w: texture_storage_2d_array<rgba16float, write>;
 
 fn fetch_color(coords: vec2<i32>, index: i32) -> vec4<f32> {
     let species_count = i32(textureNumLayers(b_texture_painted));
@@ -238,16 +238,16 @@ struct DispSettingsBuffer {
 };
 
 [[group(0), binding(0)]]
-var<storage> c_disp_settings: [[access(read)]] DispSettingsBuffer;
+var<storage, read> c_disp_settings: DispSettingsBuffer;
 [[group(0), binding(1)]]
-var c_texture: [[access(read)]] texture_storage_2d_array<rgba16float>;
+var c_texture: texture_storage_2d_array<rgba16float, read>;
 [[group(0), binding(2)]]
-var c_disp_texture: [[access(write)]] texture_storage_2d<rgba8unorm>;
+var c_disp_texture: texture_storage_2d<rgba8unorm, write>;
 
 [[stage(compute), workgroup_size(32, 32)]]
 fn combine(
     [[builtin(global_invocation_id)]] id: vec3<u32>,
-)  {
+) {
     let pos = vec2<i32>(id.xy);
     let species_count = i32(arrayLength(&c_disp_settings.settings));
     var col: vec3<f32> = vec3<f32>(0.0);

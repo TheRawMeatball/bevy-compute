@@ -46,13 +46,13 @@ use bevy::{
         texture::BevyDefault,
         view::ExtractedWindows,
         RenderApp, RenderStage,
+        options::WgpuOptions,
     },
     window::{WindowDescriptor, WindowId, WindowMode, Windows},
     PipelinedDefaultPlugins,
 };
 use rand::Rng;
-use wgpu::{BufferBinding, MapMode, ShaderModuleDescriptor, ShaderSource};
-use wgpu_types::BufferDescriptor;
+use wgpu::*;
 
 #[derive(Default)]
 struct Fullscreen(bool);
@@ -64,7 +64,12 @@ pub fn main() {
         height: 1080.,
         ..Default::default()
     })
+     .insert_resource(WgpuOptions {
+         features: Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES | Features::CLEAR_COMMANDS,
+         ..Default::default()
+     })
     .add_plugins(PipelinedDefaultPlugins)
+
     .init_resource::<Fullscreen>();
 
     let render_app = app.sub_app(RenderApp);
@@ -103,7 +108,7 @@ fn fullscreen_system(
         let primary = windows.get_primary_mut().unwrap();
         fs.0 = !fs.0;
         primary.set_mode(if fs.0 {
-            WindowMode::Fullscreen { use_size: false }
+            WindowMode::Fullscreen
         } else {
             WindowMode::Windowed
         });

@@ -1,5 +1,5 @@
 [package]
-name = "bevy-template"
+name = "bevy-compute"
 version = "0.1.0"
 authors = ["TheRawMeatball <therawmeatball@gmail.com>"]
 edition = "2021"
@@ -28,7 +28,7 @@ ndk-glue = "0.5"
 
 [patch."https://github.com/bevyengine/bevy"]
 # uncomment if you want to use a local fork
-bevy = { path = "../bevy" }
+# bevy = { path = "../bevy" }
 
 
 [package.metadata.android]

@@ -20,39 +20,33 @@ use std::{
 };
 
 use bevy::{
-    core::Time,
     core_pipeline,
-    ecs::prelude::*,
-    input::prelude::*,
-    math::*,
-    prelude::App,
-    render2::{
-        color::Color,
-        render_graph::{Node, NodeRunError, RenderGraph, RenderGraphContext},
+    prelude::*,
+    render::{
+        options::WgpuOptions,
+        render_graph::{NodeRunError, RenderGraph, RenderGraphContext},
         render_resource::{
             BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor,
             BindGroupLayoutEntry, BindingResource, BindingType, BlendComponent, BlendFactor,
-            BlendOperation, BlendState, Buffer, BufferBindingType, BufferInitDescriptor,
-            BufferSize, BufferUsages, ColorTargetState, ColorWrites, ComputePassDescriptor,
-            ComputePipeline, ComputePipelineDescriptor, Extent3d, Face, FrontFace, ImageCopyBuffer,
-            ImageCopyTexture, ImageDataLayout, ImageSubresourceRange, LoadOp, MultisampleState,
-            Operations, Origin3d, PipelineLayoutDescriptor, PolygonMode, PrimitiveState,
-            PrimitiveTopology, RawFragmentState, RawRenderPipelineDescriptor, RawVertexState,
-            RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline, ShaderStages,
-            StorageTextureAccess, Texture, TextureAspect, TextureDescriptor, TextureDimension,
-            TextureFormat, TextureUsages, TextureViewDescriptor, TextureViewDimension,
+            BlendOperation, BlendState, Buffer, BufferBinding, BufferBindingType, BufferDescriptor,
+            BufferInitDescriptor, BufferSize, BufferUsages, ColorTargetState, ColorWrites,
+            ComputePassDescriptor, ComputePipeline, ComputePipelineDescriptor, Extent3d, Face,
+            FrontFace, ImageCopyBuffer, ImageCopyTexture, ImageDataLayout, ImageSubresourceRange,
+            LoadOp, MultisampleState, Operations, Origin3d, PipelineLayoutDescriptor, PolygonMode,
+            PrimitiveState, PrimitiveTopology, RawFragmentState, RawRenderPipelineDescriptor,
+            RawVertexState, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline,
+            ShaderModuleDescriptor, ShaderSource, ShaderStages, StorageTextureAccess, Texture,
+            TextureAspect, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
+            TextureViewDescriptor, TextureViewDimension, WgpuFeatures,
         },
         renderer::{RenderContext, RenderDevice, RenderQueue},
         texture::BevyDefault,
         view::ExtractedWindows,
         RenderApp, RenderStage,
-        options::WgpuOptions,
     },
-    window::{WindowDescriptor, WindowId, WindowMode, Windows},
-    PipelinedDefaultPlugins,
+    window::{WindowId, WindowMode},
 };
 use rand::Rng;
-use wgpu::*;
 
 #[derive(Default)]
 struct Fullscreen(bool);
@@ -64,15 +58,15 @@ pub fn main() {
         height: 1080.,
         ..Default::default()
     })
-     .insert_resource(WgpuOptions {
-         features: Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES | Features::CLEAR_COMMANDS,
-         ..Default::default()
-     })
-    .add_plugins(PipelinedDefaultPlugins)
-
+    .insert_resource(WgpuOptions {
+        features: WgpuFeatures::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES
+            | WgpuFeatures::CLEAR_COMMANDS,
+        ..Default::default()
+    })
+    .add_plugins(DefaultPlugins)
     .init_resource::<Fullscreen>();
 
-    let render_app = app.sub_app(RenderApp);
+    let render_app = app.sub_app_mut(RenderApp);
     render_app.add_system_to_stage(RenderStage::Extract, time_extract_system);
     render_app.init_resource::<MoldShaders>();
     let mut graph = render_app.world.get_resource_mut::<RenderGraph>().unwrap();
@@ -116,7 +110,7 @@ fn fullscreen_system(
 }
 
 fn setup_system(mut commands: Commands) {
-    commands.spawn_bundle(bevy::render2::camera::PerspectiveCameraBundle::default());
+    commands.spawn_bundle(PerspectiveCameraBundle::default());
     // commands.spawn_bundle(bevy::render2::camera::OrthographicCameraBundle::new_2d());
 }
 #[repr(C)]
@@ -786,9 +780,10 @@ impl FromWorld for MoldShaders {
                 front_face: FrontFace::Ccw,
                 cull_mode: Some(Face::Back),
                 polygon_mode: PolygonMode::Fill,
-                clamp_depth: false,
                 conservative: false,
+                unclipped_depth: false,
             },
+            multiview: None,
         });
 
         let read_buffer = render_device.create_buffer(&BufferDescriptor {
@@ -838,7 +833,7 @@ enum ReadState {
     B,
 }
 
-impl Node for MoldNode {
+impl bevy::render::render_graph::Node for MoldNode {
     fn run(
         &self,
         _graph: &mut RenderGraphContext,
@@ -949,7 +944,7 @@ impl Node for MoldNode {
             let slice = shaders.read_buffer.slice(..);
             render_context
                 .render_device
-                .map_buffer(&slice, MapMode::Read);
+                .map_buffer(&slice, wgpu::MapMode::Read);
             let view = slice.get_mapped_range();
 
             let save_dir = Path::new(save_path);

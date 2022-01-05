@@ -29,23 +29,19 @@ struct Settings {
     sensor_size: i32;
 };
 
-[[block]]
 struct GlobalSettings {
     decay_rate: f32;
     diffuse_rate: f32;
 };
 
-[[block]]
 struct AgentBuffer {
     agents: array<Agent>;
 };
 
-[[block]]
 struct AgentSettingsBuffer {
     settings: array<Settings>;
 };
 
-[[block]]
 struct Time {
     total: f32;
     delta: f32;
@@ -137,15 +133,15 @@ fn update(
     if (weight_forward > weight_left && weight_forward > weight_right) {
         m_agents.agents[id].angle = agent.angle + 0.0;
     }
-    elseif (weight_forward < weight_left && weight_forward < weight_right) {
+    else if (weight_forward < weight_left && weight_forward < weight_right) {
         m_agents.agents[id].angle = agent.angle + (random_steer_strength - 0.5) * 2.0 * turn_amount;
     }
     // Turn right
-    elseif (weight_right > weight_left) {
+    else if (weight_right > weight_left) {
         m_agents.agents[id].angle = agent.angle - random_steer_strength * turn_amount;
     }
     // Turn left
-    elseif (weight_left > weight_right) {
+    else if (weight_left > weight_right) {
         m_agents.agents[id].angle = agent.angle + random_steer_strength * turn_amount;
     }
 
@@ -232,7 +228,6 @@ struct DispSettings {
     weight: f32;
 };
 
-[[block]]
 struct DispSettingsBuffer {
     settings: array<DispSettings>;
 };
@@ -266,11 +261,11 @@ fn combine(
             col = col + c_disp_settings.settings[completed + 1].color * vals.y;
             col = col + c_disp_settings.settings[completed + 2].color * vals.z;
         }
-        elseif (completed + 1 < species_count) {
+        else if (completed + 1 < species_count) {
             col = col + c_disp_settings.settings[completed + 0].color * vals.x;
             col = col + c_disp_settings.settings[completed + 1].color * vals.y;
         }
-        elseif (completed < species_count) {
+        else if (completed < species_count) {
             col = col + c_disp_settings.settings[completed + 0].color * vals.x;
         }
     }

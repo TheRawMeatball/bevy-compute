@@ -4,10 +4,6 @@ version = "0.1.0"
 authors = ["TheRawMeatball <therawmeatball@gmail.com>"]
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-[lib]
-crate-type = ["cdylib"]
-
 [profile.dev]
 opt-level = 1
 
@@ -16,39 +12,8 @@ dev = ["bevy/dynamic"]
 
 [dependencies]
 bevy = { git = "https://github.com/bevyengine/bevy" }
-wgpu-types = "0.11"
-wgpu = "0.11"
 rand = "0.8"
+wgpu = "0.12"
 bytemuck = { version = "1.4", features = [ "derive" ] }
 image = "0.23"
 
-[target.'cfg(target_os = "android")'.dependencies]
-ndk-glue = "0.5"
-
-
-[patch."https://github.com/bevyengine/bevy"]
-# uncomment if you want to use a local fork
-# bevy = { path = "../bevy" }
-
-
-[package.metadata.android]
-assets = "assets"
-res = "assets/android-res"
-icon = "@mipmap/ic_launcher"
-build_targets = ["aarch64-linux-android"]
-min_sdk_version = 16
-target_sdk_version = 29
-
-[package.metadata.android.application]
-label = "Bevy slimemold"
-
-[package.metadata.android.application.activity]
-orientation = "landscape"
-
-[[package.metadata.android.uses_feature]]
-name = "android.hardware.vulkan.level"
-required = true
-version = 1
-
-[[package.metadata.android.uses_permission]]
-name = "android.permission.INTERNET"

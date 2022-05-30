@@ -11,9 +11,8 @@ opt-level = 1
 dev = ["bevy/dynamic"]
 
 [dependencies]
-bevy = { git = "https://github.com/bevyengine/bevy" }
+bevy = "0.7.0"
 rand = "0.8"
-wgpu = "0.12"
 bytemuck = { version = "1.4", features = [ "derive" ] }
-image = "0.23"
+image = "0.24"
 
